@@ -6,6 +6,7 @@ interface Customer { id: number; name: string; email: string | null; created_at:
 interface Order { id: number; customer_id: number; product: string; quantity: number; unit: string; created_at: string }
 type Payload =
   | { kind: "customers"; customers: Customer[] }
+  | { kind: "search"; filters: Record<string, string | undefined>; orders: (Order & { customer_name: string })[] }
   | { kind: "orders"; customer: Customer; filters: { product?: string; since?: string; until?: string }; orders: Order[] };
 
 const EMOJI: Record<string, string> = {
@@ -31,6 +32,22 @@ function render(data: Payload | undefined, fallbackText?: string) {
     root.innerHTML = `
       <div class="head"><h1>👥 Customers</h1><span class="sub">${data.customers.length} found</span></div>
       ${data.customers.length ? `<div class="scroll"><table><thead><tr><th>ID</th><th>Name</th><th>Email</th><th>Customer since</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<div class="empty">No customers match.</div>`}`;
+    return;
+  }
+  if (data.kind === "search") {
+    const chips = Object.entries(data.filters).filter(([, v]) => v).map(([k, v]) => `<span>${esc(k)}: ${esc(v)}</span>`).join("");
+    const byCustomer = new Map<string, number>();
+    for (const o of data.orders) { const k = `${o.customer_name}: ${o.product} (${o.unit})`; byCustomer.set(k, (byCustomer.get(k) ?? 0) + o.quantity); }
+    const rows = data.orders.map((o) => `
+      <tr><td class="id">#${o.id}</td><td>${day(o.created_at)}</td><td><strong>${esc(o.customer_name)}</strong> <span class="id">#${o.customer_id}</span></td>
+      <td><span class="emoji">${emoji(o.product)}</span>${esc(o.product)}</td>
+      <td class="num">${o.quantity}</td><td><span class="chip">${esc(o.unit)}</span></td></tr>`).join("");
+    root.innerHTML = `
+      <div class="head"><div><h1>🔎 Orders across customers</h1><span class="sub">${data.orders.length} order${data.orders.length === 1 ? "" : "s"}</span></div><div class="filters">${chips}</div></div>
+      ${data.orders.length
+        ? `<div class="scroll"><table><thead><tr><th>Order</th><th>Date</th><th>Customer</th><th>Product</th><th class="num">Qty</th><th>Unit</th></tr></thead><tbody>${rows}</tbody></table></div>
+           <div class="totals">${[...byCustomer].map(([k, n]) => `<span>${esc(k)}: ${n}</span>`).join("")}</div>`
+        : `<div class="empty">No orders match.</div>`}`;
     return;
   }
   const totals = new Map<string, number>();

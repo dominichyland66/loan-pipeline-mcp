@@ -3,11 +3,12 @@ import { registerAppTool, registerAppResource, RESOURCE_MIME_TYPE, EXTENSION_ID 
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import type { Customer, Order } from "./db.js";
-import { customersTable, customerCard, ordersTable, orderCard } from "./format.js";
+import type { Customer, Order, OrderWithCustomer } from "./db.js";
+import { customersTable, customerCard, ordersTable, orderCard, searchTable } from "./format.js";
 
 const INSTRUCTIONS = `You manage a small customer and orders database.
-Workflow: resolve people by name with find_customers before anything else; use the returned id for other tools.
+Workflow: for questions about one person, resolve them with find_customers first and use the returned id.
+For questions across customers ("who bought cheese?", "what was ordered this week?") use search_orders directly.
 Quantities: "2kg of apples" = product "apples", quantity 2, unit "kg". Countable items use unit "each".
 Dates: list_orders accepts ISO dates; "last month" means since = today minus 30 days.
 Presentation: tool results already contain a Markdown table. Show that table to the user as-is
@@ -199,6 +200,38 @@ export function createMcpServer(apiBase: string): McpServer {
       ]);
       const filters = { ...(product && { product }), ...(since && { since }), ...(until && { until }) };
       return text(ordersTable(orders, customer), { kind: "orders", customer, filters, orders });
+    }),
+  );
+
+  registerAppTool(
+    server,
+    "search_orders",
+    {
+      title: "Search orders across all customers",
+      description:
+        "Search orders across every customer, newest first, as a Markdown table with a Customer column and " +
+        "per-customer totals. Answers questions like 'who bought cheese?' or 'what was ordered in the last week?'. " +
+        "Filters are optional and combine: product (partial name), customer (partial name), since/until (ISO dates).",
+      inputSchema: {
+        product: z.string().optional().describe("Partial product name, e.g. 'cheese'"),
+        customer: z.string().optional().describe("Partial customer name, e.g. 'brown'"),
+        since: z.string().optional().describe("Only orders created on/after this ISO date"),
+        until: z.string().optional().describe("Only orders created on/before this ISO date"),
+      },
+      outputSchema: {
+        kind: z.literal("search"),
+        filters: z.object({ product: z.string().optional(), customer: z.string().optional(), since: z.string().optional(), until: z.string().optional() }),
+        orders: z.array(OrderShape.extend({ customer_name: z.string() })),
+      },
+      annotations: { readOnlyHint: true },
+      _meta: { ui: { resourceUri: WIDGET_URI } },
+    },
+    wrap(async ({ product, customer, since, until }) => {
+      const qs = new URLSearchParams();
+      for (const [k, v] of Object.entries({ product, customer, since, until })) if (v) qs.set(k, v);
+      const orders = await call<OrderWithCustomer[]>("GET", `/orders${qs.size ? `?${qs}` : ""}`);
+      const filters = { ...(product && { product }), ...(customer && { customer }), ...(since && { since }), ...(until && { until }) };
+      return text(searchTable(orders, filters), { kind: "search", filters, orders });
     }),
   );
 

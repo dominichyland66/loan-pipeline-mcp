@@ -37,6 +37,7 @@ database is seeded with demo data (set `SEED_DEMO_DATA=false` to turn that off).
 | DELETE | `/api/customers/:id`               | also deletes that customer's orders            |
 | GET    | `/api/customers/:id/orders`        | `?product=banana&since=2026-09-13&until=...`   |
 | POST   | `/api/customers/:id/orders`        | `{ "product": "apples", "quantity": 2, "unit": "kg" }` |
+| GET    | `/api/orders`                      | `?product=cheese&customer=brown&since=...&until=...` across all customers |
 | GET    | `/api/orders/:id`                  |                                                |
 | PATCH  | `/api/orders/:id`                  | `{ "product": "...", "quantity": 3, "unit": "..." }` any subset |
 | DELETE | `/api/orders/:id`                  |                                                |
@@ -51,7 +52,7 @@ curl 'localhost:3000/api/customers/1/orders?product=apple'
 
 Every tool returns a ready-made **Markdown table** (with per-product totals for
 orders), and the server sends Claude **instructions** on how to chain the tools
-and to show those tables as-is. `find_customers` and `list_orders` additionally
+and to show those tables as-is. `find_customers`, `list_orders` and `search_orders` additionally
 carry an **MCP App widget**: hosts that support MCP Apps (claude.ai and Claude
 Desktop) render a styled, colourful table inside the chat; other hosts just
 show the Markdown.
@@ -63,6 +64,7 @@ show the Markdown.
 | `update_customer` | Change a customer's name and/or email                          |
 | `delete_customer` | Delete a customer and their orders                             |
 | `list_orders`     | Orders for a customer, filterable by product and date range    |
+| `search_orders`   | Orders across all customers, filterable by product, customer, dates |
 | `add_order`       | Record an order: product, quantity, unit                       |
 | `update_order`    | Change an order's product, quantity and/or unit                |
 | `delete_order`    | Delete one order                                               |
@@ -111,6 +113,8 @@ Then try:
 - "Add a new customer called Jane Smith and record that she bought 3 litres of milk."
 - "Update Mary Brown's email to mary@newmail.com."
 - "Mr Jones' apple order should have been 3kg, not 2kg. Please fix it."
+- "Who bought cheese?"
+- "What orders did Mary Brown make?"
 
 ## Layout
 

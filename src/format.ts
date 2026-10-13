@@ -1,4 +1,4 @@
-import type { Customer, Order } from "./db.js";
+import type { Customer, Order, OrderWithCustomer } from "./db.js";
 
 // Markdown tables for tool results. Claude Desktop renders Markdown, so
 // returning a ready-made table means replies arrive formatted. IDs are kept
@@ -48,4 +48,22 @@ export function ordersTable(rows: Order[], customer?: Customer): string {
 
 export function orderCard(o: Order): string {
   return ordersTable([o]);
+}
+
+export function searchTable(rows: OrderWithCustomer[], filters: Record<string, string | undefined>): string {
+  const desc = Object.entries(filters).filter(([, v]) => v).map(([k, v]) => `${k}: ${esc(v)}`).join(", ");
+  const title = `**Orders across all customers**${desc ? ` (${desc})` : ""}\n\n`;
+  if (rows.length === 0) return `${title}_No matching orders._`;
+  const lines = ["| Order | Date | Customer | Product | Qty | Unit |", "|------:|------|----------|---------|----:|------|"];
+  for (const o of rows) {
+    lines.push(`| ${o.id} | ${day(o.created_at)} | **${esc(o.customer_name)}** (#${o.customer_id}) | ${productEmoji(o.product)} ${esc(o.product)} | ${o.quantity} | ${esc(o.unit)} |`);
+  }
+  // Who bought it: per-customer totals per product+unit.
+  const totals = new Map<string, number>();
+  for (const o of rows) {
+    const k = `${o.customer_name}: ${o.product} (${o.unit})`;
+    totals.set(k, (totals.get(k) ?? 0) + o.quantity);
+  }
+  const summary = [...totals].map(([k, n]) => `${k} **${n}**`).join(" · ");
+  return `${title}${lines.join("\n")}\n\nTotals: ${summary}`;
 }

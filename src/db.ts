@@ -96,7 +96,21 @@ export const customers = {
   },
 };
 
+export type OrderWithCustomer = Order & { customer_name: string };
+
 export const orders = {
+  /** Search orders across all customers, newest first. All filters optional. */
+  search(opts: { product?: string; customer?: string; since?: string; until?: string } = {}): OrderWithCustomer[] {
+    const where: string[] = [];
+    const params: (string | number)[] = [];
+    if (opts.product) { where.push("o.product LIKE ? COLLATE NOCASE"); params.push(`%${opts.product}%`); }
+    if (opts.customer) { where.push("c.name LIKE ? COLLATE NOCASE"); params.push(`%${opts.customer}%`); }
+    if (opts.since) { where.push("o.created_at >= ?"); params.push(opts.since); }
+    if (opts.until) { where.push("o.created_at <= ?"); params.push(opts.until); }
+    const sql = `SELECT o.*, c.name AS customer_name FROM orders o JOIN customers c ON c.id = o.customer_id
+      ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY o.created_at DESC LIMIT 200`;
+    return db.prepare(sql).all(...params) as unknown as OrderWithCustomer[];
+  },
   listForCustomer(customerId: number, opts: { since?: string; until?: string; product?: string } = {}): Order[] {
     const where = ["customer_id = ?"];
     const params: (string | number)[] = [customerId];

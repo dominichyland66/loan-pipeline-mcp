@@ -52,6 +52,8 @@ if (mary.structuredContent.customers.length === 0) {
 const maryId = mary.structuredContent.customers[0].id;
 const since = new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
 show("list_orders mary bananas last month", await client.callTool({ name: "list_orders", arguments: { customer_id: maryId, product: "banana", since } }));
+show("search_orders cheese", await client.callTool({ name: "search_orders", arguments: { product: "cheese" } }));
+show("search_orders customer brown since", await client.callTool({ name: "search_orders", arguments: { customer: "brown", since } }));
 show("list_orders missing customer (error)", await client.callTool({ name: "list_orders", arguments: { customer_id: 999999 } }));
 show("delete_customer (missing)", await client.callTool({ name: "delete_customer", arguments: { customer_id: 999 } }));
 show("delete_customer jones", await client.callTool({ name: "delete_customer", arguments: { customer_id: jones.id } }));

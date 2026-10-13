@@ -42,6 +42,8 @@ const OrderQuery = z.object({
   product: z.string().optional(),
 });
 
+const OrderSearch = OrderQuery.extend({ customer: z.string().optional() });
+
 function parse<T>(schema: z.ZodType<T>, data: unknown, res: Response): T | undefined {
   const result = schema.safeParse(data);
   if (!result.success) {
@@ -114,6 +116,13 @@ api.post("/customers/:id/orders", (req, res) => {
   const body = parse(OrderInput, req.body, res);
   if (!body) return;
   res.status(201).json(orders.create(id, body.product, body.quantity, body.unit));
+});
+
+// GET /api/orders?product=cheese&customer=brown&since=...&until=...   (across all customers)
+api.get("/orders", (req, res) => {
+  const query = parse(OrderSearch, req.query, res);
+  if (!query) return;
+  res.json(orders.search(query));
 });
 
 // GET /api/orders/:id

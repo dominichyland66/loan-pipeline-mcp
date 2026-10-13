@@ -28,6 +28,8 @@ export function seedIfEmpty(): boolean {
     insertOrder.run(jones.id, "apples", 1.5, "kg", daysAgo(10));
     insertOrder.run(jones.id, "bread", 1, "each", daysAgo(2));
     insertOrder.run(sam.id, "oranges", 3, "kg", daysAgo(1));
+    insertOrder.run(sam.id, "cheese", 250, "g", daysAgo(4));
+    insertOrder.run(jones.id, "cheese", 500, "g", daysAgo(12));
   });
   return true;
 }
