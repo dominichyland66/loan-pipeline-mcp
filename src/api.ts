@@ -2,6 +2,7 @@ import { Router, type Request, type Response, type NextFunction } from "express"
 import { z } from "zod";
 import { brokers, customers, applications } from "./db.js";
 import { STATUSES, LABELS, TRANSITIONS } from "./pipeline.js";
+import { about, aboutTopic, TOPICS, type Topic } from "./about.js";
 
 export const api = Router();
 
@@ -246,6 +247,17 @@ api.delete("/applications/:id", (req, res) => {
   if (id === undefined) return;
   if (!applications.delete(id)) return res.status(404).json({ error: "application_not_found" });
   res.status(204).end();
+});
+
+// --- About -------------------------------------------------------------------
+
+// GET /api/about            → every section: [{ topic, title, markdown, data }]
+// GET /api/about/:topic     → one section
+api.get("/about", (_req, res) => res.json(about(api)));
+api.get("/about/:topic", (req, res) => {
+  const topic = req.params.topic as string;
+  if (!(TOPICS as readonly string[]).includes(topic)) return res.status(404).json({ error: "unknown_topic", topics: TOPICS });
+  res.json(aboutTopic(api, topic as Topic));
 });
 
 // Error handler (malformed JSON etc.)

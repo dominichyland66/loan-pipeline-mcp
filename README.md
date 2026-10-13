@@ -88,6 +88,8 @@ back-dated histories, one at each stage:
 | Method | Path                                   | Body / query                                   |
 | ------ | -------------------------------------- | ---------------------------------------------- |
 | GET    | `/api/pipeline`                        | status definitions + count and £ per status    |
+| GET    | `/api/about`                           | how the system is built: every topic as `{ topic, title, markdown, data }` |
+| GET    | `/api/about/:topic`                    | one of overview, architecture, stack, data_model, pipeline, rest_api, mcp_tools, deployment, design_decisions, runtime, source |
 | GET    | `/api/brokers?search=northgate`        | partial match on broker or firm name           |
 | POST   | `/api/brokers`                         | `{ "name": "Alice Khan", "firm": "Northgate Finance", "email": "..." }` |
 | GET/PATCH/DELETE | `/api/brokers/:id`           | PATCH any subset of name, firm, email; DELETE leaves their applications as direct |
@@ -132,6 +134,18 @@ per-broker breakdown for searches), and the server sends Claude
 | `advance_application` | Move an application to its next status, with actor and note           |
 | `update_application`  | Correct amount, term, purpose or broker                               |
 | `delete_application`  | Remove an application entered in error                                |
+| `explain_system`      | How this server is built: architecture, stack, schema, routes, tools, deployment, design decisions |
+
+### Self-description
+
+`GET /api/about` (and the `explain_system` tool) describe the system from the
+running code: the SQLite schema is read with `PRAGMA table_info`, the routes
+from the live Express router, the tool list from the MCP server, the pipeline
+from `src/pipeline.ts`, versions from `package.json` and the deploy details
+from Railway's environment. Only the architecture narrative and the design
+decisions (with their reasons) are written by hand, in `src/about.ts`. Ask
+Claude "how is this built?", "what database is behind this?" or "why is the
+MCP server layered over a REST API?".
 
 ## Deploy to Railway
 
@@ -177,6 +191,7 @@ Then try:
 - "New business customer: Ann Lee of Lee Logistics Ltd, introduced by Tom Reilly, wants £40k over 4 years for a trailer."
 - "Show me all open business loans."
 - "Peter Jones has withdrawn his car loan application."
+- "How is this system built, and why is the MCP server layered over a REST API?"
 
 ## Layout
 
@@ -186,6 +201,7 @@ src/db.ts       SQLite schema + queries (built-in node:sqlite, no native build)
 src/api.ts      Express router for /api
 src/mcp.ts      MCP tools, each one an HTTP call to /api; server instructions
 src/format.ts   Markdown table rendering for tool results
+src/about.ts    self-description served at /api/about and by explain_system (introspects schema, routes, tools)
 src/server.ts   Wires both into one Express app
 src/seed.ts     demo data, applied automatically to an empty database
 scripts/        seed.ts (manual seed), smoke-mcp.ts (MCP client test)

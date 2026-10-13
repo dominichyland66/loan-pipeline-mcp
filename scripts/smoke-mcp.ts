@@ -18,7 +18,8 @@ let failures = 0;
 const show = (label: string, r: any, expectError = false) => {
   const bad = Boolean(r.isError) !== expectError;
   if (bad) failures++;
-  console.log(`\n== ${label}${bad ? "  <<< UNEXPECTED" : ""}\n` + r.content.map((c: any) => c.text).join("\n") +
+  const body = r.content.map((c: any) => c.text).join("\n");
+  console.log(`\n== ${label}${bad ? "  <<< UNEXPECTED" : ""}\n` + (label.includes("all topics") ? body.slice(0, 400) + "\n…" : body) +
     (r.isError ? "\n(isError)" : "") + (r.structuredContent ? `\n[structuredContent kind=${r.structuredContent.kind}]` : ""));
   return r;
 };
@@ -75,6 +76,12 @@ show("search_applications customer smoke", await call("search_applications", { c
 show("pipeline_summary", await call("pipeline_summary"));
 show("get_application missing (error)", await call("get_application", { application_id: 999999 }), true);
 show("list_applications missing customer (error)", await call("list_applications", { customer_id: 999999 }), true);
+
+// --- Self-description ----------------------------------------------------------
+const aboutAll = show("explain_system (all topics)", await call("explain_system"));
+const aboutText: string = aboutAll.content[0].text;
+console.log(`(about document: ${aboutText.length} chars, ${(aboutText.match(/^## /gm) ?? []).length} sections)`);
+show("explain_system pipeline", await call("explain_system", { topic: "pipeline" }));
 
 // --- Clean up ---------------------------------------------------------------
 show("delete_application (personal)", await call("delete_application", { application_id: personalId }));

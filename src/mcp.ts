@@ -2,12 +2,14 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Broker, Customer, ApplicationRow, ApplicationEvent, StatusCount } from "./db.js";
 import { STATUSES, LABELS, PIPELINE_TEXT } from "./pipeline.js";
+// Circular import with about.ts is safe: TOPICS is only used inside createMcpServer, never at module load.
+import { TOPICS as ABOUT_TOPICS } from "./about.js";
 import {
   brokersTable, brokerCard, customersTable, customerCard,
   applicationsTable, searchTable, applicationCard, pipelineTable,
 } from "./format.js";
 
-const INSTRUCTIONS = `You manage a lender's loan application pipeline. Applications come in from brokers (introducers) or directly.
+export const INSTRUCTIONS = `You manage a lender's loan application pipeline. Applications come in from brokers (introducers) or directly.
 Entities: customers (a person; business borrowers also have a company_name), brokers (person + firm), applications
 (one loan request: personal or business, amount in GBP, term in months, purpose, broker, status) and each application's
 event history (every status change with who did it and a note).
@@ -25,7 +27,9 @@ Dates: "last month" means since = today minus 30 days; "this week" = 7 days.
 Presentation: tool results contain a ready-made Markdown table. Show it as-is, with a one-line summary above it that
 answers the question (e.g. "Three applications worth £175,000 are awaiting an underwriter decision."). Use the Totals line.
 Always confirm with the user before delete_customer, delete_application, delete_broker, and before moving an application
-to declined or withdrawn.`;
+to declined or withdrawn.
+About this system: for questions about how the server itself is built (architecture, stack, database schema, REST routes,
+how the tools work, deployment, why it was designed this way) call explain_system rather than guessing.`;
 
 const StatusSchema = z.enum(STATUSES);
 const LoanTypeSchema = z.enum(["personal", "business"]);
@@ -46,14 +50,47 @@ const EventShape = z.object({
   actor: z.string().nullable(), note: z.string().nullable(), created_at: z.string(),
 });
 
+export interface ToolInfo {
+  name: string;
+  title: string;
+  description: string;
+  inputs: string[];
+  readOnly: boolean;
+  destructive: boolean;
+}
+
+let toolCatalog: ToolInfo[] | undefined;
+/** Metadata for every tool this server registers (built once from a throwaway server). */
+export function describeTools(): ToolInfo[] {
+  if (!toolCatalog) {
+    toolCatalog = [];
+    createMcpServer("http://unused.invalid/api", toolCatalog);
+  }
+  return toolCatalog;
+}
+
 /**
  * Builds an MCP server whose tools call the REST API over HTTP.
  * The MCP layer is deliberately thin: it knows nothing about SQLite,
  * only about the API contract. `apiBase` is the API's own base URL,
  * e.g. http://localhost:3000/api.
  */
-export function createMcpServer(apiBase: string): McpServer {
+export function createMcpServer(apiBase: string, catalog?: ToolInfo[]): McpServer {
   const server = new McpServer({ name: "loan-pipeline", version: "2.0.0" }, { instructions: INSTRUCTIONS });
+
+  // Same as server.registerTool, but also records the tool's metadata so the
+  // system can describe its own tools (see describeTools / src/about.ts).
+  const tool: McpServer["registerTool"] = (name, config, cb) => {
+    catalog?.push({
+      name,
+      title: config.title ?? name,
+      description: config.description ?? "",
+      inputs: Object.keys(config.inputSchema ?? {}),
+      readOnly: Boolean(config.annotations?.readOnlyHint),
+      destructive: Boolean(config.annotations?.destructiveHint),
+    });
+    return server.registerTool(name, config, cb);
+  };
 
   async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
     const res = await fetch(`${apiBase}${path}`, {
@@ -96,7 +133,7 @@ export function createMcpServer(apiBase: string): McpServer {
 
   // --- Customers -------------------------------------------------------------
 
-  server.registerTool(
+  tool(
     "find_customers",
     {
       title: "Find customers",
@@ -114,7 +151,7 @@ export function createMcpServer(apiBase: string): McpServer {
     }),
   );
 
-  server.registerTool(
+  tool(
     "add_customer",
     {
       title: "Add customer",
@@ -133,7 +170,7 @@ export function createMcpServer(apiBase: string): McpServer {
     }),
   );
 
-  server.registerTool(
+  tool(
     "update_customer",
     {
       title: "Update customer",
@@ -159,7 +196,7 @@ export function createMcpServer(apiBase: string): McpServer {
     }),
   );
 
-  server.registerTool(
+  tool(
     "delete_customer",
     {
       title: "Delete customer",
@@ -175,7 +212,7 @@ export function createMcpServer(apiBase: string): McpServer {
 
   // --- Brokers ---------------------------------------------------------------
 
-  server.registerTool(
+  tool(
     "find_brokers",
     {
       title: "Find brokers",
@@ -192,7 +229,7 @@ export function createMcpServer(apiBase: string): McpServer {
     }),
   );
 
-  server.registerTool(
+  tool(
     "add_broker",
     {
       title: "Add broker",
@@ -209,7 +246,7 @@ export function createMcpServer(apiBase: string): McpServer {
     }),
   );
 
-  server.registerTool(
+  tool(
     "delete_broker",
     {
       title: "Delete broker",
@@ -225,7 +262,7 @@ export function createMcpServer(apiBase: string): McpServer {
 
   // --- Applications ----------------------------------------------------------
 
-  server.registerTool(
+  tool(
     "pipeline_summary",
     {
       title: "Pipeline summary",
@@ -242,7 +279,7 @@ export function createMcpServer(apiBase: string): McpServer {
     }),
   );
 
-  server.registerTool(
+  tool(
     "list_applications",
     {
       title: "List a customer's applications",
@@ -265,7 +302,7 @@ export function createMcpServer(apiBase: string): McpServer {
     }),
   );
 
-  server.registerTool(
+  tool(
     "search_applications",
     {
       title: "Search applications across all customers",
@@ -297,7 +334,7 @@ export function createMcpServer(apiBase: string): McpServer {
     }),
   );
 
-  server.registerTool(
+  tool(
     "get_application",
     {
       title: "Get one application with its history",
@@ -314,7 +351,7 @@ export function createMcpServer(apiBase: string): McpServer {
     }),
   );
 
-  server.registerTool(
+  tool(
     "add_application",
     {
       title: "Add a loan application",
@@ -340,7 +377,7 @@ export function createMcpServer(apiBase: string): McpServer {
     }),
   );
 
-  server.registerTool(
+  tool(
     "advance_application",
     {
       title: "Move an application to its next status",
@@ -363,7 +400,7 @@ export function createMcpServer(apiBase: string): McpServer {
     }),
   );
 
-  server.registerTool(
+  tool(
     "update_application",
     {
       title: "Update application details",
@@ -394,7 +431,7 @@ export function createMcpServer(apiBase: string): McpServer {
     }),
   );
 
-  server.registerTool(
+  tool(
     "delete_application",
     {
       title: "Delete application",
@@ -405,6 +442,33 @@ export function createMcpServer(apiBase: string): McpServer {
     wrap(async ({ application_id }) => {
       await call("DELETE", `/applications/${application_id}`);
       return text(`Deleted application #${application_id}.`);
+    }),
+  );
+
+  // --- Self-description -------------------------------------------------------
+
+  tool(
+    "explain_system",
+    {
+      title: "Explain how this system is built",
+      description:
+        "Describes this server itself, read from the running code: what it is, the architecture and request flow, the " +
+        "technology stack, the database schema, the status pipeline, the REST routes, the MCP tools and server instructions, " +
+        "deployment on Railway, the design decisions and why, runtime state, and the source layout. Use for questions like " +
+        "'how is this built?', 'what database is behind this?', 'why is MCP layered over REST?', 'which routes exist?'. " +
+        "Pick a topic or omit it for the full document.",
+      inputSchema: {
+        topic: z.enum(ABOUT_TOPICS).optional().describe(`One of: ${ABOUT_TOPICS.join(", ")}. Omit for everything.`),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    wrap(async ({ topic }) => {
+      if (topic) {
+        const s = await call<{ title: string; markdown: string }>("GET", `/about/${topic}`);
+        return text(`## ${s.title}\n\n${s.markdown}`);
+      }
+      const all = await call<{ title: string; markdown: string }[]>("GET", "/about");
+      return text(all.map((s) => `## ${s.title}\n\n${s.markdown}`).join("\n\n"));
     }),
   );
 
