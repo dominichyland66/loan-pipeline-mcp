@@ -20,8 +20,9 @@ app.use(express.json());
 
 app.get("/", (_req, res) => {
   res.json({
-    name: "customer-orders-mcp",
-    api: "/api/customers",
+    name: "loan-pipeline-mcp",
+    api: "/api/applications",
+    pipeline: "/api/pipeline",
     mcp: "/mcp",
     health: "/health",
   });
@@ -68,6 +69,6 @@ app.get("/mcp", methodNotAllowed);
 app.delete("/mcp", methodNotAllowed);
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`API  http://localhost:${PORT}/api/customers`);
+  console.log(`API  http://localhost:${PORT}/api/applications`);
   console.log(`MCP  http://localhost:${PORT}/mcp`);
 });

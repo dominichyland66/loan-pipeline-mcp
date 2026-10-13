@@ -1,7 +1,7 @@
 {
-  "name": "customer-orders-mcp",
-  "version": "1.0.0",
-  "description": "",
+  "name": "loan-pipeline-mcp",
+  "version": "2.0.0",
+  "description": "Loan application pipeline REST API with an MCP server on top",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",

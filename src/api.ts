@@ -1,48 +1,65 @@
 import { Router, type Request, type Response, type NextFunction } from "express";
 import { z } from "zod";
-import { customers, orders } from "./db.js";
+import { brokers, customers, applications } from "./db.js";
+import { STATUSES, LABELS, TRANSITIONS } from "./pipeline.js";
 
 export const api = Router();
 
 const idParam = z.coerce.number().int().positive();
+const StatusSchema = z.enum(STATUSES);
+const LoanTypeSchema = z.enum(["personal", "business"]);
+const atLeastOne = (fields: string[]) => (v: Record<string, unknown>) => fields.some((f) => v[f] !== undefined);
+
+const BrokerInput = z.object({
+  name: z.string().min(1, "name is required"),
+  firm: z.string().min(1, "firm is required"),
+  email: z.string().email().optional().nullable(),
+});
+const BrokerUpdate = z
+  .object({ name: z.string().min(1).optional(), firm: z.string().min(1).optional(), email: z.string().email().optional().nullable() })
+  .refine(atLeastOne(["name", "firm", "email"]), { message: "provide at least one of name, firm, email" });
 
 const CustomerInput = z.object({
   name: z.string().min(1, "name is required"),
   email: z.string().email().optional().nullable(),
+  company_name: z.string().optional().nullable(),
 });
-
 const CustomerUpdate = z
-  .object({
-    name: z.string().min(1).optional(),
-    email: z.string().email().optional().nullable(),
-  })
-  .refine((v) => v.name !== undefined || v.email !== undefined, {
-    message: "provide at least one of name, email",
-  });
+  .object({ name: z.string().min(1).optional(), email: z.string().email().optional().nullable(), company_name: z.string().optional().nullable() })
+  .refine(atLeastOne(["name", "email", "company_name"]), { message: "provide at least one of name, email, company_name" });
 
-const OrderInput = z.object({
-  product: z.string().min(1, "product is required"),
-  quantity: z.number().positive(),
-  unit: z.string().min(1).default("each"),
+const ApplicationInput = z.object({
+  type: LoanTypeSchema.optional(),              // defaults from the customer: company_name set → business
+  amount: z.number().positive(),
+  term_months: z.number().int().positive(),
+  purpose: z.string().min(1, "purpose is required"),
+  broker_id: z.number().int().positive().optional().nullable(),
+  actor: z.string().optional().nullable(),
+  note: z.string().optional().nullable(),
 });
-
-const OrderUpdate = z
+const ApplicationUpdate = z
   .object({
-    product: z.string().min(1).optional(),
-    quantity: z.number().positive().optional(),
-    unit: z.string().min(1).optional(),
+    amount: z.number().positive().optional(),
+    term_months: z.number().int().positive().optional(),
+    purpose: z.string().min(1).optional(),
+    broker_id: z.number().int().positive().optional().nullable(),
   })
-  .refine((v) => v.product !== undefined || v.quantity !== undefined || v.unit !== undefined, {
-    message: "provide at least one of product, quantity, unit",
-  });
-
-const OrderQuery = z.object({
+  .refine(atLeastOne(["amount", "term_months", "purpose", "broker_id"]), { message: "provide at least one of amount, term_months, purpose, broker_id" });
+const TransitionInput = z.object({
+  status: StatusSchema,
+  actor: z.string().optional().nullable(),
+  note: z.string().optional().nullable(),
+});
+const boolParam = z.preprocess((v) => (v === "true" ? true : v === "false" ? false : v), z.boolean().optional());
+const ApplicationQuery = z.object({
+  status: StatusSchema.optional(),
+  open: boolParam,
+  customer: z.string().optional(),
+  broker: z.string().optional(),
+  type: LoanTypeSchema.optional(),
   since: z.string().optional(),
   until: z.string().optional(),
-  product: z.string().optional(),
 });
-
-const OrderSearch = OrderQuery.extend({ customer: z.string().optional() });
 
 function parse<T>(schema: z.ZodType<T>, data: unknown, res: Response): T | undefined {
   const result = schema.safeParse(data);
@@ -53,22 +70,72 @@ function parse<T>(schema: z.ZodType<T>, data: unknown, res: Response): T | undef
   return result.data;
 }
 
-// --- Customers -------------------------------------------------------------
+// --- Pipeline ----------------------------------------------------------------
 
-// GET /api/customers?search=jones
+// GET /api/pipeline  → status definitions + how many applications sit in each
+api.get("/pipeline", (_req, res) => {
+  res.json({
+    statuses: STATUSES.map((s) => ({ status: s, label: LABELS[s], next: TRANSITIONS[s] })),
+    summary: applications.summary(),
+  });
+});
+
+// --- Brokers -----------------------------------------------------------------
+
+// GET /api/brokers?search=northgate   (matches broker name or firm)
+api.get("/brokers", (req, res) => {
+  const search = typeof req.query.search === "string" ? req.query.search : undefined;
+  res.json(brokers.list(search));
+});
+
+// POST /api/brokers { name, firm, email? }
+api.post("/brokers", (req, res) => {
+  const body = parse(BrokerInput, req.body, res);
+  if (!body) return;
+  res.status(201).json(brokers.create(body.name, body.firm, body.email));
+});
+
+api.get("/brokers/:id", (req, res) => {
+  const id = parse(idParam, req.params.id, res);
+  if (id === undefined) return;
+  const broker = brokers.get(id);
+  if (!broker) return res.status(404).json({ error: "broker_not_found" });
+  res.json(broker);
+});
+
+api.patch("/brokers/:id", (req, res) => {
+  const id = parse(idParam, req.params.id, res);
+  if (id === undefined) return;
+  const body = parse(BrokerUpdate, req.body, res);
+  if (!body) return;
+  const updated = brokers.update(id, body);
+  if (!updated) return res.status(404).json({ error: "broker_not_found" });
+  res.json(updated);
+});
+
+// DELETE /api/brokers/:id  (their applications stay, as direct applications)
+api.delete("/brokers/:id", (req, res) => {
+  const id = parse(idParam, req.params.id, res);
+  if (id === undefined) return;
+  if (!brokers.delete(id)) return res.status(404).json({ error: "broker_not_found" });
+  res.status(204).end();
+});
+
+// --- Customers ---------------------------------------------------------------
+
+// GET /api/customers?search=patel   (matches person or company name)
 api.get("/customers", (req, res) => {
   const search = typeof req.query.search === "string" ? req.query.search : undefined;
   res.json(customers.list(search));
 });
 
-// POST /api/customers { name, email? }
+// POST /api/customers { name, email?, company_name? }
 api.post("/customers", (req, res) => {
   const body = parse(CustomerInput, req.body, res);
   if (!body) return;
-  res.status(201).json(customers.create(body.name, body.email));
+  res.status(201).json(customers.create(body.name, body.email, body.company_name));
 });
 
-// GET /api/customers/:id
 api.get("/customers/:id", (req, res) => {
   const id = parse(idParam, req.params.id, res);
   if (id === undefined) return;
@@ -77,7 +144,7 @@ api.get("/customers/:id", (req, res) => {
   res.json(customer);
 });
 
-// PATCH /api/customers/:id { name?, email? }  (email: null clears it)
+// PATCH /api/customers/:id { name?, email?, company_name? }  (null clears)
 api.patch("/customers/:id", (req, res) => {
   const id = parse(idParam, req.params.id, res);
   if (id === undefined) return;
@@ -88,7 +155,7 @@ api.patch("/customers/:id", (req, res) => {
   res.json(updated);
 });
 
-// DELETE /api/customers/:id  (cascades to that customer's orders)
+// DELETE /api/customers/:id  (cascades to their applications and events)
 api.delete("/customers/:id", (req, res) => {
   const id = parse(idParam, req.params.id, res);
   if (id === undefined) return;
@@ -96,60 +163,88 @@ api.delete("/customers/:id", (req, res) => {
   res.status(204).end();
 });
 
-// --- Orders ----------------------------------------------------------------
+// --- Applications ------------------------------------------------------------
 
-// GET /api/customers/:id/orders?since=2026-09-13&until=...&product=banana
-api.get("/customers/:id/orders", (req, res) => {
+// GET /api/customers/:id/applications?status=funded
+api.get("/customers/:id/applications", (req, res) => {
   const id = parse(idParam, req.params.id, res);
   if (id === undefined) return;
   if (!customers.get(id)) return res.status(404).json({ error: "customer_not_found" });
-  const query = parse(OrderQuery, req.query, res);
+  const query = parse(z.object({ status: StatusSchema.optional() }), req.query, res);
   if (!query) return;
-  res.json(orders.listForCustomer(id, query));
+  res.json(applications.listForCustomer(id, query));
 });
 
-// POST /api/customers/:id/orders { product, quantity, unit? }
-api.post("/customers/:id/orders", (req, res) => {
+// POST /api/customers/:id/applications { amount, term_months, purpose, type?, broker_id?, actor?, note? }
+api.post("/customers/:id/applications", (req, res) => {
   const id = parse(idParam, req.params.id, res);
   if (id === undefined) return;
-  if (!customers.get(id)) return res.status(404).json({ error: "customer_not_found" });
-  const body = parse(OrderInput, req.body, res);
+  const customer = customers.get(id);
+  if (!customer) return res.status(404).json({ error: "customer_not_found" });
+  const body = parse(ApplicationInput, req.body, res);
   if (!body) return;
-  res.status(201).json(orders.create(id, body.product, body.quantity, body.unit));
+  const type = body.type ?? (customer.company_name ? "business" : "personal");
+  if (type === "business" && !customer.company_name) {
+    return res.status(400).json({ error: "company_name_required", message: "A business application needs a customer with a company_name." });
+  }
+  if (body.broker_id && !brokers.get(body.broker_id)) return res.status(404).json({ error: "broker_not_found" });
+  res.status(201).json(applications.create(id, { ...body, type }));
 });
 
-// GET /api/orders?product=cheese&customer=brown&since=...&until=...   (across all customers)
-api.get("/orders", (req, res) => {
-  const query = parse(OrderSearch, req.query, res);
+// GET /api/applications?status=awaiting_underwriter&open=true&customer=patel&broker=northgate&type=business&since=...&until=...
+api.get("/applications", (req, res) => {
+  const query = parse(ApplicationQuery, req.query, res);
   if (!query) return;
-  res.json(orders.search(query));
+  res.json(applications.search(query));
 });
 
-// GET /api/orders/:id
-api.get("/orders/:id", (req, res) => {
+// GET /api/applications/:id  → the application plus its full event history
+api.get("/applications/:id", (req, res) => {
   const id = parse(idParam, req.params.id, res);
   if (id === undefined) return;
-  const order = orders.get(id);
-  if (!order) return res.status(404).json({ error: "order_not_found" });
-  res.json(order);
+  const app = applications.get(id);
+  if (!app) return res.status(404).json({ error: "application_not_found" });
+  res.json({ ...app, events: applications.events(id) });
 });
 
-// PATCH /api/orders/:id { product?, quantity?, unit? }
-api.patch("/orders/:id", (req, res) => {
+// POST /api/applications/:id/transition { status, actor?, note? }
+api.post("/applications/:id/transition", (req, res) => {
   const id = parse(idParam, req.params.id, res);
   if (id === undefined) return;
-  const body = parse(OrderUpdate, req.body, res);
+  const body = parse(TransitionInput, req.body, res);
   if (!body) return;
-  const updated = orders.update(id, body);
-  if (!updated) return res.status(404).json({ error: "order_not_found" });
+  const result = applications.transition(id, body.status, body);
+  if (!result.ok) {
+    if (result.reason === "not_found") return res.status(404).json({ error: "application_not_found" });
+    return res.status(409).json({
+      error: "invalid_transition",
+      from: result.from,
+      to: body.status,
+      allowed: result.allowed,
+      message: result.allowed.length
+        ? `Cannot move from ${LABELS[result.from]} to ${LABELS[body.status]}. Allowed: ${result.allowed.map((s) => LABELS[s]).join(", ")}.`
+        : `${LABELS[result.from]} is a final status; the application cannot move again.`,
+    });
+  }
+  res.json({ ...result.application, event: result.event });
+});
+
+// PATCH /api/applications/:id { amount?, term_months?, purpose?, broker_id? }
+api.patch("/applications/:id", (req, res) => {
+  const id = parse(idParam, req.params.id, res);
+  if (id === undefined) return;
+  const body = parse(ApplicationUpdate, req.body, res);
+  if (!body) return;
+  if (body.broker_id && !brokers.get(body.broker_id)) return res.status(404).json({ error: "broker_not_found" });
+  const updated = applications.update(id, body);
+  if (!updated) return res.status(404).json({ error: "application_not_found" });
   res.json(updated);
 });
 
-// DELETE /api/orders/:id
-api.delete("/orders/:id", (req, res) => {
+api.delete("/applications/:id", (req, res) => {
   const id = parse(idParam, req.params.id, res);
   if (id === undefined) return;
-  if (!orders.delete(id)) return res.status(404).json({ error: "order_not_found" });
+  if (!applications.delete(id)) return res.status(404).json({ error: "application_not_found" });
   res.status(204).end();
 });
 
