@@ -11,8 +11,10 @@ Workflow: for questions about one person, resolve them with find_customers first
 For questions across customers ("who bought cheese?", "what was ordered this week?") use search_orders directly.
 Quantities: "2kg of apples" = product "apples", quantity 2, unit "kg". Countable items use unit "each".
 Dates: list_orders accepts ISO dates; "last month" means since = today minus 30 days.
-Presentation: tool results already contain a Markdown table. Show that table to the user as-is
-(you may add a one-line summary above it), and when summing quantities use the Totals line.
+Presentation: tool results contain a Markdown table. If the host rendered the result as an interactive
+widget in the chat, do NOT repeat the table or list the rows; reply with one or two sentences that answer
+the question (e.g. "Mary Brown bought 18 bananas in the last month, across 2 orders."). If no widget was
+rendered, show the Markdown table as-is with a one-line summary above it. Use the Totals line when summing.
 Always confirm with the user before delete_customer.`;
 
 // The MCP App widget (an HTML page rendered inside the chat by hosts that
@@ -95,7 +97,8 @@ export function createMcpServer(apiBase: string): McpServer {
       description:
         "Search customers by (partial, case-insensitive) name. Use this first to resolve a name such as " +
         "'Mr Jones' or 'Mary Brown' to a customer id before adding or listing orders. " +
-        "Call with no search term to list every customer. Returns a Markdown table.",
+        "Call with no search term to list every customer. Returns a Markdown table." +
+        " If this result is shown as an interactive widget, answer in a sentence or two and do not repeat the table.",
       inputSchema: { search: z.string().optional().describe("Part of the customer's name, e.g. 'jones'") },
       outputSchema: { kind: z.literal("customers"), customers: z.array(CustomerShape) },
       annotations: { readOnlyHint: true },
@@ -172,7 +175,8 @@ export function createMcpServer(apiBase: string): McpServer {
         "List a customer's orders, newest first, as a Markdown table with per-product totals. " +
         "Optionally filter by product name and/or a date range (ISO 8601, e.g. '2026-09-13'). " +
         "To answer 'how many bananas did X buy last month', filter by product='banana' and since=<30 days ago> " +
-        "and read the Totals line.",
+        "and read the Totals line." +
+        " If this result is shown as an interactive widget, answer in a sentence or two and do not repeat the table.",
       inputSchema: {
         customer_id: z.number().int().positive().describe("Customer id from find_customers"),
         product: z.string().optional().describe("Partial product name filter, e.g. 'banana'"),
@@ -211,7 +215,8 @@ export function createMcpServer(apiBase: string): McpServer {
       description:
         "Search orders across every customer, newest first, as a Markdown table with a Customer column and " +
         "per-customer totals. Answers questions like 'who bought cheese?' or 'what was ordered in the last week?'. " +
-        "Filters are optional and combine: product (partial name), customer (partial name), since/until (ISO dates).",
+        "Filters are optional and combine: product (partial name), customer (partial name), since/until (ISO dates)." +
+        " If this result is shown as an interactive widget, answer in a sentence or two and do not repeat the table.",
       inputSchema: {
         product: z.string().optional().describe("Partial product name, e.g. 'cheese'"),
         customer: z.string().optional().describe("Partial customer name, e.g. 'brown'"),
