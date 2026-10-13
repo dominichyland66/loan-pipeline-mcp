@@ -1,42 +1,58 @@
 // Smoke test: exercises every MCP tool against a running server.
 // Usage: npm run smoke            (local)
 //        MCP_URL=https://<app>.up.railway.app/mcp npm run smoke
-
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
+const url = process.env.MCP_URL ?? "http://localhost:3000/mcp";
 const client = new Client({ name: "test-client", version: "0.0.1" });
-await client.connect(new StreamableHTTPClientTransport(new URL(`${process.env.MCP_URL ?? "http://localhost:3000/mcp"}`)));
+await client.connect(new StreamableHTTPClientTransport(new URL(url)));
+
+const instructions = client.getInstructions();
+console.log("INSTRUCTIONS:", instructions ? `${instructions.split("\n")[0]} …` : "(none)");
 
 const tools = await client.listTools();
 console.log("TOOLS:", tools.tools.map((t) => t.name).join(", "));
+const withUi = tools.tools.filter((t) => (t._meta as any)?.ui?.resourceUri).map((t) => t.name);
+console.log("TOOLS WITH WIDGET:", withUi.join(", ") || "(none)");
 
-const show = (label: string, r: any) => console.log(`\n== ${label}\n` + r.content.map((c: any) => c.text).join("\n") + (r.isError ? "\n(isError)" : ""));
+const resources = await client.listResources();
+console.log("RESOURCES:", resources.resources.map((r) => `${r.uri} [${r.mimeType}]`).join(", ") || "(none)");
+if (resources.resources[0]) {
+  const read = await client.readResource({ uri: resources.resources[0].uri });
+  const html = (read.contents[0] as { text?: string }).text ?? "";
+  console.log(`WIDGET HTML: ${(html.length / 1024).toFixed(0)} KB, starts "${html.slice(0, 15)}"`);
+}
+
+const show = (label: string, r: any) =>
+  console.log(`\n== ${label}\n` + r.content.map((c: any) => c.text).join("\n") + (r.isError ? "\n(isError)" : "") +
+    (r.structuredContent ? `\n[structuredContent kind=${r.structuredContent.kind}]` : ""));
 
 show("add_customer", await client.callTool({ name: "add_customer", arguments: { name: "Mr Jones" } }));
 const found: any = await client.callTool({ name: "find_customers", arguments: { search: "jones" } });
 show("find_customers jones", found);
-const jones = JSON.parse(found.content[0].text)[0];
+const jones = found.structuredContent.customers.find((c: any) => c.name === "Mr Jones");
 show("update_customer rename + email", await client.callTool({ name: "update_customer", arguments: { customer_id: jones.id, name: "Mr P Jones", email: "pj@example.com" } }));
 show("update_customer clear email", await client.callTool({ name: "update_customer", arguments: { customer_id: jones.id, email: "" } }));
 show("update_customer nothing (error)", await client.callTool({ name: "update_customer", arguments: { customer_id: jones.id } }));
 const added: any = await client.callTool({ name: "add_order", arguments: { customer_id: jones.id, product: "apples", quantity: 2, unit: "kg" } });
 show("add_order 2kg apples", added);
-const orderId = JSON.parse(added.content[0].text).id;
+const orderId = Number(/order #(\d+)/.exec(added.content[0].text)![1]);
 show("update_order quantity 3", await client.callTool({ name: "update_order", arguments: { order_id: orderId, quantity: 3 } }));
 show("update_order product pears, unit each", await client.callTool({ name: "update_order", arguments: { order_id: orderId, product: "pears", unit: "each" } }));
 show("update_order nothing (error)", await client.callTool({ name: "update_order", arguments: { order_id: orderId } }));
 show("update_order missing (error)", await client.callTool({ name: "update_order", arguments: { order_id: 999999, quantity: 1 } }));
+
 // Mary Brown may not exist on a fresh database; create her if needed.
 let mary: any = await client.callTool({ name: "find_customers", arguments: { search: "mary brown" } });
-let maryList = JSON.parse(mary.content[0].text);
-if (maryList.length === 0) {
+if (mary.structuredContent.customers.length === 0) {
   show("add_customer Mary Brown (missing)", await client.callTool({ name: "add_customer", arguments: { name: "Mary Brown" } }));
   mary = await client.callTool({ name: "find_customers", arguments: { search: "mary brown" } });
-  maryList = JSON.parse(mary.content[0].text);
 }
-const maryId = maryList[0].id;
-show("list_orders mary bananas last month", await client.callTool({ name: "list_orders", arguments: { customer_id: maryId, product: "banana", since: "2026-09-13" } }));
+const maryId = mary.structuredContent.customers[0].id;
+const since = new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
+show("list_orders mary bananas last month", await client.callTool({ name: "list_orders", arguments: { customer_id: maryId, product: "banana", since } }));
+show("list_orders missing customer (error)", await client.callTool({ name: "list_orders", arguments: { customer_id: 999999 } }));
 show("delete_customer (missing)", await client.callTool({ name: "delete_customer", arguments: { customer_id: 999 } }));
 show("delete_customer jones", await client.callTool({ name: "delete_customer", arguments: { customer_id: jones.id } }));
 await client.close();

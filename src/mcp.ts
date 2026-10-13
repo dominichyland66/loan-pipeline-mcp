@@ -1,5 +1,35 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { registerAppTool, registerAppResource, RESOURCE_MIME_TYPE } from "@modelcontextprotocol/ext-apps/server";
+import fs from "node:fs";
+import path from "node:path";
 import { z } from "zod";
+import type { Customer, Order } from "./db.js";
+import { customersTable, customerCard, ordersTable, orderCard } from "./format.js";
+
+const INSTRUCTIONS = `You manage a small customer and orders database.
+Workflow: resolve people by name with find_customers before anything else; use the returned id for other tools.
+Quantities: "2kg of apples" = product "apples", quantity 2, unit "kg". Countable items use unit "each".
+Dates: list_orders accepts ISO dates; "last month" means since = today minus 30 days.
+Presentation: tool results already contain a Markdown table. Show that table to the user as-is
+(you may add a one-line summary above it), and when summing quantities use the Totals line.
+Always confirm with the user before delete_customer.`;
+
+// The MCP App widget (an HTML page rendered inside the chat by hosts that
+// support MCP Apps). Built by scripts/build-widget.mjs into dist/widget.html.
+const WIDGET_URI = "ui://customer-orders/table.html";
+const WIDGET_PATH = path.join(process.cwd(), "dist", "widget.html");
+let widgetHtml: string | undefined;
+function loadWidget(): string {
+  widgetHtml ??= fs.readFileSync(WIDGET_PATH, "utf8");
+  return widgetHtml;
+}
+
+const CustomerShape = z.object({
+  id: z.number(), name: z.string(), email: z.string().nullable(), created_at: z.string(),
+});
+const OrderShape = z.object({
+  id: z.number(), customer_id: z.number(), product: z.string(), quantity: z.number(), unit: z.string(), created_at: z.string(),
+});
 
 /**
  * Builds an MCP server whose tools call the REST API over HTTP.
@@ -8,7 +38,7 @@ import { z } from "zod";
  * e.g. http://localhost:3000/api.
  */
 export function createMcpServer(apiBase: string): McpServer {
-  const server = new McpServer({ name: "customer-orders", version: "1.0.0" });
+  const server = new McpServer({ name: "customer-orders", version: "1.0.0" }, { instructions: INSTRUCTIONS });
 
   async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
     const res = await fetch(`${apiBase}${path}`, {
@@ -25,8 +55,9 @@ export function createMcpServer(apiBase: string): McpServer {
     return data as T;
   }
 
-  const text = (value: unknown) => ({
-    content: [{ type: "text" as const, text: typeof value === "string" ? value : JSON.stringify(value, null, 2) }],
+  const text = (markdown: string, structured?: Record<string, unknown>) => ({
+    content: [{ type: "text" as const, text: markdown }],
+    ...(structured ? { structuredContent: structured } : {}),
   });
 
   const error = (message: string) => ({
@@ -34,9 +65,9 @@ export function createMcpServer(apiBase: string): McpServer {
     isError: true,
   });
 
-  const wrap = <A>(fn: (args: A) => Promise<unknown>) => async (args: A) => {
+  const wrap = <A>(fn: (args: A) => Promise<ReturnType<typeof text>>) => async (args: A) => {
     try {
-      return text(await fn(args));
+      return await fn(args);
     } catch (err) {
       return error((err as Error).message);
     }
@@ -44,18 +75,24 @@ export function createMcpServer(apiBase: string): McpServer {
 
   // --- Customers -------------------------------------------------------------
 
-  server.registerTool(
+  registerAppTool(
+    server,
     "find_customers",
     {
       title: "Find customers",
       description:
         "Search customers by (partial, case-insensitive) name. Use this first to resolve a name such as " +
         "'Mr Jones' or 'Mary Brown' to a customer id before adding or listing orders. " +
-        "Call with no search term to list every customer.",
+        "Call with no search term to list every customer. Returns a Markdown table.",
       inputSchema: { search: z.string().optional().describe("Part of the customer's name, e.g. 'jones'") },
+      outputSchema: { kind: z.literal("customers"), customers: z.array(CustomerShape) },
       annotations: { readOnlyHint: true },
+      _meta: { ui: { resourceUri: WIDGET_URI } },
     },
-    wrap(({ search }) => call("GET", `/customers${search ? `?search=${encodeURIComponent(search)}` : ""}`)),
+    wrap(async ({ search }) => {
+      const customers = await call<Customer[]>("GET", `/customers${search ? `?search=${encodeURIComponent(search)}` : ""}`);
+      return text(customersTable(customers), { kind: "customers", customers });
+    }),
   );
 
   server.registerTool(
@@ -68,7 +105,10 @@ export function createMcpServer(apiBase: string): McpServer {
         email: z.string().email().optional().describe("Optional email address"),
       },
     },
-    wrap(({ name, email }) => call("POST", "/customers", { name, email })),
+    wrap(async ({ name, email }) => {
+      const c = await call<Customer>("POST", "/customers", { name, email });
+      return text(`Created customer #${c.id}.\n\n${customerCard(c)}`);
+    }),
   );
 
   server.registerTool(
@@ -85,12 +125,13 @@ export function createMcpServer(apiBase: string): McpServer {
       },
       annotations: { idempotentHint: true },
     },
-    wrap(({ customer_id, name, email }) => {
+    wrap(async ({ customer_id, name, email }) => {
       if (name === undefined && email === undefined) throw new Error("Provide a new name and/or email.");
       const body: Record<string, unknown> = {};
       if (name !== undefined) body.name = name;
       if (email !== undefined) body.email = email === "" ? null : email;
-      return call("PATCH", `/customers/${customer_id}`, body);
+      const c = await call<Customer>("PATCH", `/customers/${customer_id}`, body);
+      return text(`Updated customer #${c.id}.\n\n${customerCard(c)}`);
     }),
   );
 
@@ -104,35 +145,49 @@ export function createMcpServer(apiBase: string): McpServer {
     },
     wrap(async ({ customer_id }) => {
       await call("DELETE", `/customers/${customer_id}`);
-      return `Deleted customer ${customer_id} and their orders.`;
+      return text(`Deleted customer #${customer_id} and their orders.`);
     }),
   );
 
   // --- Orders ----------------------------------------------------------------
 
-  server.registerTool(
+  registerAppTool(
+    server,
     "list_orders",
     {
       title: "List orders for a customer",
       description:
-        "List a customer's orders, newest first. Optionally filter by product name and/or a date range " +
-        "(ISO 8601, e.g. '2026-09-13' or '2026-09-13T00:00:00Z'). Each order has product, quantity, unit and created_at. " +
-        "To answer 'how many bananas did X buy last month', filter by product='banana' and since=<a month ago>, then sum quantity.",
+        "List a customer's orders, newest first, as a Markdown table with per-product totals. " +
+        "Optionally filter by product name and/or a date range (ISO 8601, e.g. '2026-09-13'). " +
+        "To answer 'how many bananas did X buy last month', filter by product='banana' and since=<30 days ago> " +
+        "and read the Totals line.",
       inputSchema: {
         customer_id: z.number().int().positive().describe("Customer id from find_customers"),
         product: z.string().optional().describe("Partial product name filter, e.g. 'banana'"),
         since: z.string().optional().describe("Only orders created on/after this ISO date"),
         until: z.string().optional().describe("Only orders created on/before this ISO date"),
       },
+      outputSchema: {
+        kind: z.literal("orders"),
+        customer: CustomerShape,
+        filters: z.object({ product: z.string().optional(), since: z.string().optional(), until: z.string().optional() }),
+        orders: z.array(OrderShape),
+      },
       annotations: { readOnlyHint: true },
+      _meta: { ui: { resourceUri: WIDGET_URI } },
     },
-    wrap(({ customer_id, product, since, until }) => {
+    wrap(async ({ customer_id, product, since, until }) => {
       const qs = new URLSearchParams();
       if (product) qs.set("product", product);
       if (since) qs.set("since", since);
       if (until) qs.set("until", until);
       const query = qs.size ? `?${qs}` : "";
-      return call("GET", `/customers/${customer_id}/orders${query}`);
+      const [customer, orders] = await Promise.all([
+        call<Customer>("GET", `/customers/${customer_id}`),
+        call<Order[]>("GET", `/customers/${customer_id}/orders${query}`),
+      ]);
+      const filters = { ...(product && { product }), ...(since && { since }), ...(until && { until }) };
+      return text(ordersTable(orders, customer), { kind: "orders", customer, filters, orders });
     }),
   );
 
@@ -150,9 +205,10 @@ export function createMcpServer(apiBase: string): McpServer {
         unit: z.string().min(1).default("each").describe("Unit such as 'kg', 'litre', 'each'"),
       },
     },
-    wrap(({ customer_id, product, quantity, unit }) =>
-      call("POST", `/customers/${customer_id}/orders`, { product, quantity, unit }),
-    ),
+    wrap(async ({ customer_id, product, quantity, unit }) => {
+      const o = await call<Order>("POST", `/customers/${customer_id}/orders`, { product, quantity, unit });
+      return text(`Added order #${o.id} for customer #${customer_id}.\n\n${orderCard(o)}`);
+    }),
   );
 
   server.registerTool(
@@ -170,7 +226,7 @@ export function createMcpServer(apiBase: string): McpServer {
       },
       annotations: { idempotentHint: true },
     },
-    wrap(({ order_id, product, quantity, unit }) => {
+    wrap(async ({ order_id, product, quantity, unit }) => {
       if (product === undefined && quantity === undefined && unit === undefined) {
         throw new Error("Provide a new product, quantity and/or unit.");
       }
@@ -178,7 +234,8 @@ export function createMcpServer(apiBase: string): McpServer {
       if (product !== undefined) body.product = product;
       if (quantity !== undefined) body.quantity = quantity;
       if (unit !== undefined) body.unit = unit;
-      return call("PATCH", `/orders/${order_id}`, body);
+      const o = await call<Order>("PATCH", `/orders/${order_id}`, body);
+      return text(`Updated order #${o.id}.\n\n${orderCard(o)}`);
     }),
   );
 
@@ -192,9 +249,17 @@ export function createMcpServer(apiBase: string): McpServer {
     },
     wrap(async ({ order_id }) => {
       await call("DELETE", `/orders/${order_id}`);
-      return `Deleted order ${order_id}.`;
+      return text(`Deleted order #${order_id}.`);
     }),
   );
+
+  // --- MCP App widget ----------------------------------------------------------
+  // Hosts that support MCP Apps (claude.ai, Claude Desktop) fetch this resource
+  // and render it in an iframe next to the find_customers / list_orders result.
+  // Other hosts ignore the _meta and just show the Markdown table.
+  registerAppResource(server, "Customer orders table", WIDGET_URI, { mimeType: RESOURCE_MIME_TYPE }, async () => ({
+    contents: [{ uri: WIDGET_URI, mimeType: RESOURCE_MIME_TYPE, text: loadWidget() }],
+  }));
 
   return server;
 }
