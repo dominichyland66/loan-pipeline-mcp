@@ -17,7 +17,7 @@ import { describeTools, INSTRUCTIONS } from "./mcp.js";
 
 export const TOPICS = [
   "overview", "architecture", "stack", "data_model", "pipeline", "rest_api",
-  "mcp_tools", "deployment", "design_decisions", "runtime", "source",
+  "mcp_server", "mcp_tools", "deployment", "design_decisions", "runtime", "source",
 ] as const;
 export type Topic = (typeof TOPICS)[number];
 
@@ -229,6 +229,61 @@ function sections(api: Router): Record<Topic, AboutSection> {
       table(["Method", "Path", "What it does"], rts.map((r) => [r.method, r.path, r.note])),
   };
 
+  const mcp_server: AboutSection = {
+    topic: "mcp_server", title: "What the MCP server actually is (the code)",
+    data: {
+      endpoint: "POST /mcp in src/server.ts",
+      factory: "createMcpServer(apiBase) in src/mcp.ts",
+      sdk: { package: "@modelcontextprotocol/sdk", version: deps["@modelcontextprotocol/sdk"] ?? null, classes: ["McpServer", "StreamableHTTPServerTransport"] },
+      lifecycle: "new McpServer + new transport per request; both closed when the response ends",
+      tool_count: tools.length,
+      helpers: ["call(method, path, body): fetch to the REST API, adds x-mcp-tool header", "text(markdown, structured): builds the MCP result content", "wrap(fn): converts thrown errors into isError results"],
+      handled_by_sdk: ["JSON-RPC framing", "initialize handshake (name, version, instructions)", "tools/list from the registered zod schemas", "tools/call dispatch and argument validation"],
+    },
+    markdown:
+      "There is no separate MCP process or binary. The MCP server is **one Express route plus one factory function**, " +
+      "running inside the same Node process as the REST API.\n\n" +
+      "**1. The endpoint** is `POST /mcp` in src/server.ts. Each request gets a brand-new `McpServer` and a stateless " +
+      "`StreamableHTTPServerTransport` from the official SDK; both are closed when the response finishes, so nothing is kept in memory between calls:\n\n" +
+      "```ts\n" +
+      "app.post(\"/mcp\", async (req, res) => {\n" +
+      "  const server = createMcpServer(API_BASE);\n" +
+      "  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });\n" +
+      "  res.on(\"close\", () => { transport.close(); server.close(); });\n" +
+      "  await server.connect(transport);\n" +
+      "  await transport.handleRequest(req, res, req.body);\n" +
+      "});\n" +
+      "```\n\n" +
+      "GET and DELETE on /mcp answer 405, because a stateless server has no sessions or server-initiated streams.\n\n" +
+      "**2. The factory** `createMcpServer(apiBase)` in src/mcp.ts is what makes it an MCP server. It constructs an `McpServer` " +
+      `with a name and the server instructions, then registers ${tools.length} tools. Every tool is a name, a description, a zod input schema, ` +
+      "an optional output schema, annotations (read-only / destructive / idempotent hints) and an async handler:\n\n" +
+      "```ts\n" +
+      "const server = new McpServer({ name: \"loan-pipeline\", version: \"2.0.0\" }, { instructions: INSTRUCTIONS });\n\n" +
+      "tool(\"find_customers\", {\n" +
+      "  title: \"Find customers\",\n" +
+      "  description: \"Search customers by partial, case-insensitive person name or company name...\",\n" +
+      "  inputSchema: { search: z.string().optional() },\n" +
+      "  outputSchema: { kind: z.literal(\"customers\"), customers: z.array(CustomerShape) },\n" +
+      "  annotations: { readOnlyHint: true },\n" +
+      "}, wrap(async ({ search }) => {\n" +
+      "  const customers = await call<Customer[]>(\"GET\", `/customers${query({ search })}`);\n" +
+      "  return text(customersTable(customers), { kind: \"customers\", customers });\n" +
+      "}));\n" +
+      "```\n\n" +
+      "**3. Three small helpers** do the rest of the work inside the factory:\n\n" +
+      "- `call(method, path, body)` is a thin `fetch` wrapper that hits the REST API at `apiBase` (loopback by default), " +
+      "adds an `x-mcp-tool` header naming the running tool so the access log can attribute the API call, and throws with the API's error text on a non-2xx response.\n" +
+      "- `text(markdown, structured)` returns the MCP result shape: a `content` array with one text item (a ready-made Markdown table) and optional `structuredContent` JSON.\n" +
+      "- `wrap(fn)` catches anything the handler throws and returns it as an `isError` result, so a 409 invalid transition reaches Claude as a readable message rather than a protocol failure.\n\n" +
+      "The tool handlers never touch SQLite. They only know the REST contract, which is why the whole MCP layer is a few hundred lines.\n\n" +
+      "**4. What the SDK handles** so the repo does not have to: JSON-RPC framing over HTTP, the `initialize` handshake (which carries the " +
+      "name, version and instructions), building the `tools/list` response from the registered zod schemas, and validating arguments and " +
+      "dispatching `tools/call` to the right handler. The project's own code is only the tool definitions and the one route.\n\n" +
+      "**5. Seeing it from the outside.** Claude Desktop (or any MCP client) is pointed at the public /mcp URL. The same tools can be exercised " +
+      "without Claude by `npm run smoke`, which uses the SDK's client to call every tool against a running server.",
+  };
+
   const mcp_tools: AboutSection = {
     topic: "mcp_tools", title: "MCP tools and instructions",
     data: { server: { name: "loan-pipeline", transport: "Streamable HTTP, stateless, POST /mcp" }, tools, instructions: INSTRUCTIONS },
@@ -288,7 +343,7 @@ function sections(api: Router): Record<Topic, AboutSection> {
       "\n\n**npm scripts:** " + Object.entries(pkg.scripts ?? {}).map(([k, v]) => `\`${k}\` (${v})`).join(", "),
   };
 
-  return { overview, architecture, stack, data_model, pipeline, rest_api, mcp_tools, deployment, design_decisions, runtime, source };
+  return { overview, architecture, stack, data_model, pipeline, rest_api, mcp_server, mcp_tools, deployment, design_decisions, runtime, source };
 }
 
 export function about(api: Router): AboutSection[] {

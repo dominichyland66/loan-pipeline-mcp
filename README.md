@@ -91,7 +91,7 @@ back-dated histories, one at each stage:
 | GET    | `/api/logs`                            | recent requests: `?limit=&since=&until=&source=rest\|tool\|mcp&route=&detail=&status_min=` |
 | GET    | `/api/logs/summary`                    | usage summary: totals, by source, busiest routes, per-tool calls, DB activity per table, per hour, slowest |
 | GET    | `/api/about`                           | how the system is built: every topic as `{ topic, title, markdown, data }` |
-| GET    | `/api/about/:topic`                    | one of overview, architecture, stack, data_model, pipeline, rest_api, mcp_tools, deployment, design_decisions, runtime, source |
+| GET    | `/api/about/:topic`                    | one of overview, architecture, stack, data_model, pipeline, rest_api, mcp_server, mcp_tools, deployment, design_decisions, runtime, source |
 | GET    | `/api/brokers?search=northgate`        | partial match on broker or firm name           |
 | POST   | `/api/brokers`                         | `{ "name": "Alice Khan", "firm": "Northgate Finance", "email": "..." }` |
 | GET/PATCH/DELETE | `/api/brokers/:id`           | PATCH any subset of name, firm, email; DELETE leaves their applications as direct |
