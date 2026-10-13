@@ -3,6 +3,7 @@ import { z } from "zod";
 import { brokers, customers, applications } from "./db.js";
 import { STATUSES, LABELS, TRANSITIONS } from "./pipeline.js";
 import { about, aboutTopic, TOPICS, type Topic } from "./about.js";
+import { logs } from "./accesslog.js";
 
 export const api = Router();
 
@@ -258,6 +259,32 @@ api.get("/about/:topic", (req, res) => {
   const topic = req.params.topic as string;
   if (!(TOPICS as readonly string[]).includes(topic)) return res.status(404).json({ error: "unknown_topic", topics: TOPICS });
   res.json(aboutTopic(api, topic as Topic));
+});
+
+// --- Access logs --------------------------------------------------------------
+
+const LogsQuery = z.object({
+  since: z.string().optional(),
+  until: z.string().optional(),
+  source: z.enum(["rest", "tool", "mcp", "other"]).optional(),
+  route: z.string().optional(),
+  detail: z.string().optional(),
+  status_min: z.coerce.number().int().optional(),
+  limit: z.coerce.number().int().min(1).max(1000).optional(),
+});
+
+// GET /api/logs?limit=100&since=&until=&source=rest|tool|mcp&route=applications&detail=search_app&status_min=400
+api.get("/logs", (req, res) => {
+  const query = parse(LogsQuery, req.query, res);
+  if (!query) return;
+  res.json(logs.recent(query));
+});
+
+// GET /api/logs/summary?since=&until=   → request volumes, per-route and per-tool stats, DB activity, per-hour series
+api.get("/logs/summary", (req, res) => {
+  const query = parse(LogsQuery.pick({ since: true, until: true }), req.query, res);
+  if (!query) return;
+  res.json(logs.summary(query));
 });
 
 // Error handler (malformed JSON etc.)

@@ -3,6 +3,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { api } from "./api.js";
 import { createMcpServer } from "./mcp.js";
 import { seedIfEmpty } from "./seed.js";
+import { accessLogger } from "./accesslog.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
 // Where the MCP tools reach the REST API. Defaults to this same process.
@@ -16,6 +17,7 @@ if (process.env.SEED_DEMO_DATA !== "false" && seedIfEmpty()) {
 }
 
 const app = express();
+app.use(accessLogger);      // logs every request except /health and /api/logs*
 app.use(express.json());
 
 app.get("/", (_req, res) => {
@@ -23,6 +25,8 @@ app.get("/", (_req, res) => {
     name: "loan-pipeline-mcp",
     api: "/api/applications",
     pipeline: "/api/pipeline",
+    about: "/api/about",
+    logs: "/api/logs/summary",
     mcp: "/mcp",
     health: "/health",
   });

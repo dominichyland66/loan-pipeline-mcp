@@ -1,4 +1,5 @@
 import type { Broker, Customer, ApplicationRow, ApplicationEvent, StatusCount } from "./db.js";
+import type { AccessLogRow, UsageSummary } from "./accesslog.js";
 import { type Status, LABELS, TRANSITIONS, statusWithIcon, isOpen } from "./pipeline.js";
 
 // Markdown tables for tool results. Claude Desktop renders Markdown, so
@@ -118,4 +119,60 @@ export function pipelineTable(summary: StatusCount[]): string {
   return `**Pipeline summary**\n\n${lines.join("\n")}\n\n` +
     `Open: **${sum(open, "count")}** applications, **${money(sum(open, "total_amount"))}** · ` +
     `Closed: ${sum(closed, "count")} applications, ${money(sum(closed, "total_amount"))}`;
+}
+
+// --- Access logs ---------------------------------------------------------------
+
+const ms = (n: number) => `${Math.round(n * 10) / 10} ms`;
+const time = (iso: string) => iso.slice(11, 19);
+
+export function requestsTable(rows: AccessLogRow[], filters: Record<string, string | number | undefined>): string {
+  const desc = Object.entries(filters).filter(([, v]) => v !== undefined && v !== "").map(([k, v]) => `${k}: ${esc(v)}`).join(", ");
+  const title = `**Recent requests** (newest first${desc ? `, ${desc}` : ""})\n\n`;
+  if (rows.length === 0) return `${title}_No requests logged._`;
+  const lines = ["| Time (UTC) | Source | Request | Status | Time | DB queries | DB time | Detail |", "|------------|--------|---------|-------:|-----:|-----------:|--------:|--------|"];
+  for (const r of rows) {
+    lines.push(`| ${r.ts.slice(0, 10)} ${time(r.ts)} | ${r.source} | ${r.method} ${esc(r.path)} | ${r.status} | ${ms(r.duration_ms)} | ${r.db_queries} | ${ms(r.db_ms)} | ${dash(r.detail)} |`);
+  }
+  const errors = rows.filter((r) => r.status >= 400).length;
+  const dbq = rows.reduce((n, r) => n + r.db_queries, 0);
+  return `${title}${lines.join("\n")}\n\nTotals: **${rows.length}** requests shown, ${errors} errors, ${dbq} database queries. Sources: rest = external /api calls, tool = /api calls made by MCP tools, mcp = calls from Claude to /mcp.`;
+}
+
+export function usageSummary(s: UsageSummary): string {
+  const out: string[] = [];
+  const windowDesc = s.window.since || s.window.until ? `${s.window.since ?? "start"} → ${s.window.until ?? "now"}` : "all logged requests";
+  out.push(`**API usage summary** (${windowDesc}; logged ${s.window.first ? `${s.window.first.slice(0, 16)}Z to ${s.window.last!.slice(0, 16)}Z` : "nothing yet"})`);
+  out.push("");
+  out.push(`Requests: **${s.totals.requests}** (${s.totals.errors} errors) · avg ${ms(s.totals.avg_ms)}, max ${ms(s.totals.max_ms)} · database: **${s.totals.db_queries}** queries, ${ms(s.totals.db_ms)} in SQLite. ` +
+    `Process up ${Math.round(s.process.uptime_s / 60)} min since ${s.process.started_at.slice(0, 16)}Z; ${s.process.db_queries_total} queries in total including startup and seeding.`);
+  if (s.totals.requests === 0) return out.join("\n");
+
+  out.push("", "**By source**", "", "| Source | Requests | Errors | Avg | Max | DB queries | DB time |", "|--------|---------:|-------:|----:|----:|-----------:|--------:|");
+  for (const r of s.by_source) out.push(`| ${r.source} | ${r.requests} | ${r.errors} | ${ms(r.avg_ms)} | ${ms(r.max_ms)} | ${r.db_queries} | ${ms(r.db_ms)} |`);
+  out.push("", "rest = external callers of /api · tool = /api called by the MCP tools · mcp = Claude talking to /mcp (each tool call appears once as mcp and once as tool).");
+
+  if (s.routes.length) {
+    out.push("", "**Busiest API routes**", "", "| Route | Requests | Errors | Avg | Max | DB queries (avg/req) |", "|-------|---------:|-------:|----:|----:|---------------------:|");
+    for (const r of s.routes.slice(0, 15)) out.push(`| ${r.method} ${esc(r.route)} | ${r.requests} | ${r.errors} | ${ms(r.avg_ms)} | ${ms(r.max_ms)} | ${r.db_queries} (${r.avg_db_queries}) |`);
+  }
+  if (s.tools.length) {
+    out.push("", "**MCP tool calls**", "", "| Tool | Calls | Errors | Avg | Max |", "|------|------:|-------:|----:|----:|");
+    for (const t of s.tools) out.push(`| ${t.tool} | ${t.calls} | ${t.errors} | ${ms(t.avg_ms)} | ${ms(t.max_ms)} |`);
+    out.push("", "Other MCP traffic: " + s.mcp_methods.filter((m) => m.mcp_method !== "tools/call").map((m) => `${m.mcp_method} ${m.calls}`).join(" · "));
+  }
+  if (s.database.by_table.length) {
+    out.push("", "**Database activity**", "", "| Table | Statement | Queries | Total | Avg |", "|-------|-----------|--------:|------:|----:|");
+    for (const t of s.database.by_table.slice(0, 15)) out.push(`| ${t.table} | ${t.kind} | ${t.queries} | ${ms(t.total_ms)} | ${t.avg_ms} ms |`);
+    out.push("", "By statement: " + s.database.by_kind.map((k) => `${k.kind} ${k.queries} (${ms(k.total_ms)})`).join(" · "));
+  }
+  if (s.per_hour.length) {
+    out.push("", "**Per hour (UTC)**", "", "| Hour | Requests | rest | tool | mcp | DB queries | Avg |", "|------|---------:|-----:|-----:|----:|-----------:|----:|");
+    for (const h of s.per_hour.slice(-24)) out.push(`| ${h.hour.slice(0, 13)} | ${h.requests} | ${h.rest} | ${h.tool} | ${h.mcp} | ${h.db_queries} | ${ms(h.avg_ms)} |`);
+  }
+  if (s.slowest.length) {
+    out.push("", "**Slowest requests**", "", "| Time (UTC) | Request | Status | Time | DB queries | Detail |", "|------------|---------|-------:|-----:|-----------:|--------|");
+    for (const r of s.slowest) out.push(`| ${r.ts.slice(0, 16)} | ${r.method} ${esc(r.path)} | ${r.status} | ${ms(r.duration_ms)} | ${r.db_queries} | ${dash(r.detail)} |`);
+  }
+  return out.join("\n");
 }

@@ -51,6 +51,8 @@ const TABLE_NOTES: Record<string, string> = {
   customers: "Borrowers. A business borrower has company_name set; a personal borrower leaves it NULL.",
   applications: "One loan request. Current status lives here; the history lives in application_events.",
   application_events: "Append-only history: one row per status change with who did it and a note. The first row is the 'received' event.",
+  access_log: "One row per HTTP request (except /health and /api/logs*): source, route, status, duration, and the number/time of SQL statements it caused. Pruned to the newest 20,000.",
+  query_log: "One row per SQL statement run while handling a logged request: kind (SELECT/INSERT/...), table and duration.",
 };
 
 function schema() {
@@ -94,6 +96,8 @@ const ROUTE_NOTES: Record<string, string> = {
   "POST /applications/:id/transition": "Move to a new status { status, actor?, note? }; 409 invalid_transition lists allowed moves",
   "PATCH /applications/:id": "Change any subset of amount, term_months, purpose, broker_id (null = direct)",
   "DELETE /applications/:id": "Delete an application and its history",
+  "GET /logs": "Recent requests from the access log: ?limit=&since=&until=&source=rest|tool|mcp&route=&detail=&status_min=",
+  "GET /logs/summary": "Usage summary: totals, by source, busiest routes, per-tool calls, database activity per table, per-hour series, slowest requests",
   "GET /about": "This self-description, all topics",
   "GET /about/:topic": "One topic of the self-description",
 };
@@ -115,6 +119,8 @@ const FILES: [string, string][] = [
   ["src/format.ts", "Turns rows into Markdown tables (totals, per-broker breakdown, application card with history)."],
   ["src/mcp.ts", "createMcpServer(apiBase): registers the MCP tools and the server instructions; every tool is an HTTP call to /api."],
   ["src/about.ts", "This self-description (introspects schema, routes, tools)."],
+  ["src/metrics.ts", "AsyncLocalStorage request context and the SQLite instrumentation that times every statement and attributes it to the current request."],
+  ["src/accesslog.ts", "Express middleware writing access_log/query_log rows on response finish, plus the queries behind /api/logs and /api/logs/summary."],
   ["src/seed.ts", "Demo data: 3 brokers, 6 customers, 12 applications with back-dated histories, one at each stage. Runs only on an empty database."],
   ["src/server.ts", "Wires it together: express.json, /, /health, /api, POST /mcp (new McpServer + stateless StreamableHTTPServerTransport per request)."],
   ["scripts/smoke-mcp.ts", "MCP client test that drives every tool, including the error paths, and cleans up after itself."],
@@ -134,6 +140,7 @@ const DECISIONS: [string, string][] = [
   ["Business vs personal via company_name", "A customer with company_name is a business borrower. An application's type defaults from that, and the API refuses a business application for a customer without a company."],
   ["Markdown tables in tool results", "Tools return a ready-made Markdown table plus structuredContent. Claude Desktop renders the Markdown directly, so answers arrive formatted without the model retyping rows. An earlier interactive-widget version (MCP Apps) was removed because rendering was unreliable."],
   ["Server instructions", "The MCP initialize response carries instructions describing the pipeline, how to chain tools, how to parse '£25k over 5 years', and when to confirm before destructive actions."],
+  ["Access logging inside the same database", "Every request to /api and /mcp is timed and written to access_log, with the SQL statements it caused in query_log (attributed through AsyncLocalStorage, so no code in the handlers changes). It answers 'how busy is the API and the database?' from the service itself; /health and /api/logs* are excluded so monitoring does not inflate the numbers. Like the rest of the data it is ephemeral on Railway."],
   ["No authentication", "Deliberate for the demo: anyone with the /mcp URL can read and write. A real deployment would put OAuth or an API key in front of /mcp and /api."],
 ];
 
@@ -172,6 +179,7 @@ function sections(api: Router): Record<Topic, AboutSection> {
       "5. The **query layer** (src/db.ts) runs one SQL statement joining applications, customers and brokers.\n" +
       "6. The rows come back up the stack; **format.ts** renders a Markdown table with totals and a per-broker breakdown, which is returned as the tool's text content alongside `structuredContent`.\n" +
       "7. Claude shows the table with a one-line summary, as the server instructions ask.\n\n" +
+      "Each hop is logged: the access-log middleware (src/accesslog.ts) times every request to /mcp and /api and records the SQL statements it caused, so one tool call shows up once as source `mcp` (Claude → /mcp) and once as source `tool` (the tool → /api, tagged with the tool name via an x-mcp-tool header).\n\n" +
       "Writes follow the same path. `advance_application` posts to `/api/applications/:id/transition`; the database layer checks the move against the pipeline definition inside a transaction, updates the status and appends an event, or the API answers 409 with the allowed moves and the tool relays that message.",
   };
 

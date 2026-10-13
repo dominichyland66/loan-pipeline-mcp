@@ -1,13 +1,19 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { z } from "zod";
 import type { Broker, Customer, ApplicationRow, ApplicationEvent, StatusCount } from "./db.js";
+import type { AccessLogRow, UsageSummary } from "./accesslog.js";
 import { STATUSES, LABELS, PIPELINE_TEXT } from "./pipeline.js";
 // Circular import with about.ts is safe: TOPICS is only used inside createMcpServer, never at module load.
 import { TOPICS as ABOUT_TOPICS } from "./about.js";
 import {
   brokersTable, brokerCard, customersTable, customerCard,
   applicationsTable, searchTable, applicationCard, pipelineTable,
+  requestsTable, usageSummary,
 } from "./format.js";
+
+/** Name of the MCP tool currently executing, so its API calls can be tagged in the access log. */
+const currentTool = new AsyncLocalStorage<string>();
 
 export const INSTRUCTIONS = `You manage a lender's loan application pipeline. Applications come in from brokers (introducers) or directly.
 Entities: customers (a person; business borrowers also have a company_name), brokers (person + firm), applications
@@ -29,7 +35,9 @@ answers the question (e.g. "Three applications worth £175,000 are awaiting an u
 Always confirm with the user before delete_customer, delete_application, delete_broker, and before moving an application
 to declined or withdrawn.
 About this system: for questions about how the server itself is built (architecture, stack, database schema, REST routes,
-how the tools work, deployment, why it was designed this way) call explain_system rather than guessing.`;
+how the tools work, deployment, why it was designed this way) call explain_system rather than guessing.
+Usage and load ("how busy is the API?", "what is hitting the database?", "any errors lately?"): usage_summary for the
+aggregated picture, recent_requests for the individual requests.`;
 
 const StatusSchema = z.enum(STATUSES);
 const LoanTypeSchema = z.enum(["personal", "business"]);
@@ -89,15 +97,17 @@ export function createMcpServer(apiBase: string, catalog?: ToolInfo[]): McpServe
       readOnly: Boolean(config.annotations?.readOnlyHint),
       destructive: Boolean(config.annotations?.destructiveHint),
     });
-    return server.registerTool(name, config, cb);
+    // Run the handler with its tool name in context so call() can tag the API request.
+    const tagged = ((...args: Parameters<typeof cb>) => currentTool.run(name, () => (cb as (...a: unknown[]) => unknown)(...args))) as typeof cb;
+    return server.registerTool(name, config, tagged);
   };
 
   async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const res = await fetch(`${apiBase}${path}`, {
-      method,
-      headers: body ? { "content-type": "application/json" } : undefined,
-      body: body ? JSON.stringify(body) : undefined,
-    });
+    const headers: Record<string, string> = {};
+    if (body) headers["content-type"] = "application/json";
+    const toolName = currentTool.getStore();
+    if (toolName) headers["x-mcp-tool"] = toolName;   // lets the access log attribute this API call to the tool
+    const res = await fetch(`${apiBase}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
     if (res.status === 204) return undefined as T;
     const data = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
     if (!res.ok) {
@@ -469,6 +479,50 @@ export function createMcpServer(apiBase: string, catalog?: ToolInfo[]): McpServe
       }
       const all = await call<{ title: string; markdown: string }[]>("GET", "/about");
       return text(all.map((s) => `## ${s.title}\n\n${s.markdown}`).join("\n\n"));
+    }),
+  );
+
+  // --- Usage / access logs -----------------------------------------------------
+
+  tool(
+    "usage_summary",
+    {
+      title: "API and database usage summary",
+      description:
+        "How busy this service is: request counts and response times by source (external REST, MCP tool calls, Claude's " +
+        "MCP traffic), the busiest API routes, calls per MCP tool, database statements per table and kind, a per-hour " +
+        "series and the slowest requests. Optional since/until ISO timestamps narrow the window. Logs live on the " +
+        "container's disk, so they start fresh at each deploy.",
+      inputSchema: { since, until },
+      annotations: { readOnlyHint: true },
+    },
+    wrap(async ({ since, until }) => {
+      const summary = await call<UsageSummary>("GET", `/logs/summary${query({ since, until })}`);
+      return text(usageSummary(summary));
+    }),
+  );
+
+  tool(
+    "recent_requests",
+    {
+      title: "Recent requests from the access log",
+      description:
+        "Individual requests handled by this service, newest first, with status, duration, number of database queries " +
+        "and the MCP tool or method involved. Filter by source (rest = external /api callers, tool = /api calls made by MCP " +
+        "tools, mcp = Claude's calls to /mcp), by route/path fragment, by tool name (detail) or errors only (status_min 400).",
+      inputSchema: {
+        limit: z.number().int().min(1).max(500).optional().describe("How many rows, default 50"),
+        source: z.enum(["rest", "tool", "mcp", "other"]).optional(),
+        route: z.string().optional().describe("Path fragment, e.g. 'applications' or '/transition'"),
+        detail: z.string().optional().describe("Tool name or MCP method fragment, e.g. 'search_applications'"),
+        status_min: z.number().int().optional().describe("Only responses with status >= this, e.g. 400 for errors"),
+        since, until,
+      },
+      annotations: { readOnlyHint: true },
+    },
+    wrap(async (args) => {
+      const rows = await call<AccessLogRow[]>("GET", `/logs${query({ ...args, limit: args.limit ?? 50 })}`);
+      return text(requestsTable(rows, args as Record<string, string | number | undefined>));
     }),
   );
 

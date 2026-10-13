@@ -88,6 +88,8 @@ back-dated histories, one at each stage:
 | Method | Path                                   | Body / query                                   |
 | ------ | -------------------------------------- | ---------------------------------------------- |
 | GET    | `/api/pipeline`                        | status definitions + count and £ per status    |
+| GET    | `/api/logs`                            | recent requests: `?limit=&since=&until=&source=rest\|tool\|mcp&route=&detail=&status_min=` |
+| GET    | `/api/logs/summary`                    | usage summary: totals, by source, busiest routes, per-tool calls, DB activity per table, per hour, slowest |
 | GET    | `/api/about`                           | how the system is built: every topic as `{ topic, title, markdown, data }` |
 | GET    | `/api/about/:topic`                    | one of overview, architecture, stack, data_model, pipeline, rest_api, mcp_tools, deployment, design_decisions, runtime, source |
 | GET    | `/api/brokers?search=northgate`        | partial match on broker or firm name           |
@@ -135,6 +137,25 @@ per-broker breakdown for searches), and the server sends Claude
 | `update_application`  | Correct amount, term, purpose or broker                               |
 | `delete_application`  | Remove an application entered in error                                |
 | `explain_system`      | How this server is built: architecture, stack, schema, routes, tools, deployment, design decisions |
+| `usage_summary`       | How busy the API and database are: by source, route, tool, table, hour     |
+| `recent_requests`     | Individual logged requests with status, duration and DB query counts       |
+
+### Access log and usage
+
+Every request to `/api` and `/mcp` is logged to the `access_log` table (source,
+route, status, duration) and every SQL statement it caused to `query_log`
+(kind, table, duration), attributed to the request through `AsyncLocalStorage`
+so the handlers themselves are untouched. `/health` and `/api/logs*` are not
+logged. Because the MCP tools call the API over HTTP, one tool call appears
+twice: once as source `mcp` (Claude → `/mcp`, detail `tools/call <tool>`) and
+once as source `tool` (the tool → `/api`, tagged with the tool name). External
+callers of `/api` appear as `rest`. The log is pruned to the newest 20,000
+requests and, like all the data, starts fresh on each deploy.
+
+```bash
+curl 'localhost:3000/api/logs?limit=20&source=tool'
+curl 'localhost:3000/api/logs/summary' | jq '.totals, .by_source, .database.by_table[:5]'
+```
 
 ### Self-description
 
@@ -192,6 +213,7 @@ Then try:
 - "Show me all open business loans."
 - "Peter Jones has withdrawn his car loan application."
 - "How is this system built, and why is the MCP server layered over a REST API?"
+- "How busy has the API been, and which tables is the database hitting most?"
 
 ## Layout
 
@@ -202,6 +224,8 @@ src/api.ts      Express router for /api
 src/mcp.ts      MCP tools, each one an HTTP call to /api; server instructions
 src/format.ts   Markdown table rendering for tool results
 src/about.ts    self-description served at /api/about and by explain_system (introspects schema, routes, tools)
+src/metrics.ts  request context + SQLite instrumentation (times every statement, attributes it to the request)
+src/accesslog.ts access-log middleware and the queries behind /api/logs and /api/logs/summary
 src/server.ts   Wires both into one Express app
 src/seed.ts     demo data, applied automatically to an empty database
 scripts/        seed.ts (manual seed), smoke-mcp.ts (MCP client test)

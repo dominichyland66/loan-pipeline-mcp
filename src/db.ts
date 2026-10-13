@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import path from "node:path";
 import { type Status, STATUSES, TRANSITIONS, canTransition } from "./pipeline.js";
+import { instrument } from "./metrics.js";
 
 // Uses Node's built-in SQLite (node:sqlite, Node 22.13+/24), so there is no
 // native addon to compile at install time. That matters on Railway, whose
@@ -13,6 +14,8 @@ const DB_PATH = process.env.DB_PATH ?? path.join(process.cwd(), "data", "app.db"
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 
 export const db = new DatabaseSync(DB_PATH);
+/** Un-instrumented prepare, for the access log's own writes (so they are not counted as queries). */
+export const rawPrepare = instrument(db);
 db.exec("PRAGMA journal_mode = WAL");
 db.exec("PRAGMA foreign_keys = ON");
 

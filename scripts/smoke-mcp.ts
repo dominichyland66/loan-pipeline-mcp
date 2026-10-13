@@ -83,6 +83,11 @@ const aboutText: string = aboutAll.content[0].text;
 console.log(`(about document: ${aboutText.length} chars, ${(aboutText.match(/^## /gm) ?? []).length} sections)`);
 show("explain_system pipeline", await call("explain_system", { topic: "pipeline" }));
 
+// --- Usage / access logs -----------------------------------------------------------
+show("recent_requests (tool source, 8 rows)", await call("recent_requests", { limit: 8, source: "tool" }));
+show("recent_requests errors only", await call("recent_requests", { limit: 5, status_min: 400 }));
+show("usage_summary", await call("usage_summary"));
+
 // --- Clean up ---------------------------------------------------------------
 show("delete_application (personal)", await call("delete_application", { application_id: personalId }));
 show("delete_customer (personal)", await call("delete_customer", { customer_id: personId }));
