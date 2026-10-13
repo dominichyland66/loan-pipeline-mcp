@@ -26,6 +26,16 @@ const OrderInput = z.object({
   unit: z.string().min(1).default("each"),
 });
 
+const OrderUpdate = z
+  .object({
+    product: z.string().min(1).optional(),
+    quantity: z.number().positive().optional(),
+    unit: z.string().min(1).optional(),
+  })
+  .refine((v) => v.product !== undefined || v.quantity !== undefined || v.unit !== undefined, {
+    message: "provide at least one of product, quantity, unit",
+  });
+
 const OrderQuery = z.object({
   since: z.string().optional(),
   until: z.string().optional(),
@@ -104,6 +114,26 @@ api.post("/customers/:id/orders", (req, res) => {
   const body = parse(OrderInput, req.body, res);
   if (!body) return;
   res.status(201).json(orders.create(id, body.product, body.quantity, body.unit));
+});
+
+// GET /api/orders/:id
+api.get("/orders/:id", (req, res) => {
+  const id = parse(idParam, req.params.id, res);
+  if (id === undefined) return;
+  const order = orders.get(id);
+  if (!order) return res.status(404).json({ error: "order_not_found" });
+  res.json(order);
+});
+
+// PATCH /api/orders/:id { product?, quantity?, unit? }
+api.patch("/orders/:id", (req, res) => {
+  const id = parse(idParam, req.params.id, res);
+  if (id === undefined) return;
+  const body = parse(OrderUpdate, req.body, res);
+  if (!body) return;
+  const updated = orders.update(id, body);
+  if (!updated) return res.status(404).json({ error: "order_not_found" });
+  res.json(updated);
 });
 
 // DELETE /api/orders/:id

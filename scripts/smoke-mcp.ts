@@ -20,7 +20,13 @@ const jones = JSON.parse(found.content[0].text)[0];
 show("update_customer rename + email", await client.callTool({ name: "update_customer", arguments: { customer_id: jones.id, name: "Mr P Jones", email: "pj@example.com" } }));
 show("update_customer clear email", await client.callTool({ name: "update_customer", arguments: { customer_id: jones.id, email: "" } }));
 show("update_customer nothing (error)", await client.callTool({ name: "update_customer", arguments: { customer_id: jones.id } }));
-show("add_order 2kg apples", await client.callTool({ name: "add_order", arguments: { customer_id: jones.id, product: "apples", quantity: 2, unit: "kg" } }));
+const added: any = await client.callTool({ name: "add_order", arguments: { customer_id: jones.id, product: "apples", quantity: 2, unit: "kg" } });
+show("add_order 2kg apples", added);
+const orderId = JSON.parse(added.content[0].text).id;
+show("update_order quantity 3", await client.callTool({ name: "update_order", arguments: { order_id: orderId, quantity: 3 } }));
+show("update_order product pears, unit each", await client.callTool({ name: "update_order", arguments: { order_id: orderId, product: "pears", unit: "each" } }));
+show("update_order nothing (error)", await client.callTool({ name: "update_order", arguments: { order_id: orderId } }));
+show("update_order missing (error)", await client.callTool({ name: "update_order", arguments: { order_id: 999999, quantity: 1 } }));
 // Mary Brown may not exist on a fresh database; create her if needed.
 let mary: any = await client.callTool({ name: "find_customers", arguments: { search: "mary brown" } });
 let maryList = JSON.parse(mary.content[0].text);

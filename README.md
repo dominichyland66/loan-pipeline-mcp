@@ -37,6 +37,8 @@ database is seeded with demo data (set `SEED_DEMO_DATA=false` to turn that off).
 | DELETE | `/api/customers/:id`               | also deletes that customer's orders            |
 | GET    | `/api/customers/:id/orders`        | `?product=banana&since=2026-09-13&until=...`   |
 | POST   | `/api/customers/:id/orders`        | `{ "product": "apples", "quantity": 2, "unit": "kg" }` |
+| GET    | `/api/orders/:id`                  |                                                |
+| PATCH  | `/api/orders/:id`                  | `{ "product": "...", "quantity": 3, "unit": "..." }` any subset |
 | DELETE | `/api/orders/:id`                  |                                                |
 
 ```bash
@@ -55,6 +57,7 @@ curl 'localhost:3000/api/customers/1/orders?product=apple'
 | `delete_customer` | Delete a customer and their orders                             |
 | `list_orders`     | Orders for a customer, filterable by product and date range    |
 | `add_order`       | Record an order: product, quantity, unit                       |
+| `update_order`    | Change an order's product, quantity and/or unit                |
 | `delete_order`    | Delete one order                                               |
 
 The tool descriptions tell Claude how to chain them, e.g. "How many bananas has
@@ -100,6 +103,7 @@ Then try:
 - "How many bananas has Mary Brown bought in the last month?"
 - "Add a new customer called Jane Smith and record that she bought 3 litres of milk."
 - "Update Mary Brown's email to mary@newmail.com."
+- "Mr Jones' apple order should have been 3kg, not 2kg. Please fix it."
 
 ## Layout
 

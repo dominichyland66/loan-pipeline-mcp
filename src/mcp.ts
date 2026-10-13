@@ -156,6 +156,33 @@ export function createMcpServer(apiBase: string): McpServer {
   );
 
   server.registerTool(
+    "update_order",
+    {
+      title: "Update order",
+      description:
+        "Change an existing order's product, quantity and/or unit. Only the fields you pass are changed. " +
+        "Get the order_id from list_orders first. Returns the updated order.",
+      inputSchema: {
+        order_id: z.number().int().positive().describe("Order id from list_orders"),
+        product: z.string().min(1).optional().describe("New product name"),
+        quantity: z.number().positive().optional().describe("New quantity"),
+        unit: z.string().min(1).optional().describe("New unit such as 'kg', 'litre', 'each'"),
+      },
+      annotations: { idempotentHint: true },
+    },
+    wrap(({ order_id, product, quantity, unit }) => {
+      if (product === undefined && quantity === undefined && unit === undefined) {
+        throw new Error("Provide a new product, quantity and/or unit.");
+      }
+      const body: Record<string, unknown> = {};
+      if (product !== undefined) body.product = product;
+      if (quantity !== undefined) body.quantity = quantity;
+      if (unit !== undefined) body.unit = unit;
+      return call("PATCH", `/orders/${order_id}`, body);
+    }),
+  );
+
+  server.registerTool(
     "delete_order",
     {
       title: "Delete order",

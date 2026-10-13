@@ -116,6 +116,15 @@ export const orders = {
       .run(customerId, product.trim().toLowerCase(), quantity, unit.trim().toLowerCase());
     return this.get(Number(info.lastInsertRowid))!;
   },
+  update(id: number, changes: { product?: string; quantity?: number; unit?: string }): Order | undefined {
+    const existing = this.get(id);
+    if (!existing) return undefined;
+    const product = changes.product !== undefined ? changes.product.trim().toLowerCase() : existing.product;
+    const quantity = changes.quantity ?? existing.quantity;
+    const unit = changes.unit !== undefined ? changes.unit.trim().toLowerCase() : existing.unit;
+    db.prepare("UPDATE orders SET product = ?, quantity = ?, unit = ? WHERE id = ?").run(product, quantity, unit, id);
+    return this.get(id);
+  },
   delete(id: number): boolean {
     return db.prepare("DELETE FROM orders WHERE id = ?").run(id).changes > 0;
   },
