@@ -1,5 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { registerAppTool, registerAppResource, RESOURCE_MIME_TYPE } from "@modelcontextprotocol/ext-apps/server";
+import { registerAppTool, registerAppResource, RESOURCE_MIME_TYPE, EXTENSION_ID } from "@modelcontextprotocol/ext-apps/server";
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
@@ -38,7 +38,18 @@ const OrderShape = z.object({
  * e.g. http://localhost:3000/api.
  */
 export function createMcpServer(apiBase: string): McpServer {
-  const server = new McpServer({ name: "customer-orders", version: "1.0.0" }, { instructions: INSTRUCTIONS });
+  const server = new McpServer(
+    { name: "customer-orders", version: "1.0.0" },
+    {
+      instructions: INSTRUCTIONS,
+      // Advertise MCP Apps support in the initialize response. registerAppTool
+      // only sets tool metadata; some hosts (Claude Desktop) also need this
+      // capability declared before they will render ui:// resources.
+      capabilities: {
+        extensions: { [EXTENSION_ID]: { mimeTypes: [RESOURCE_MIME_TYPE] } },
+      } as Record<string, unknown>,
+    },
+  );
 
   async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
     const res = await fetch(`${apiBase}${path}`, {
