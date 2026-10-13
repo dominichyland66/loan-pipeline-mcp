@@ -61,7 +61,7 @@ Mary Brown bought in the last month" becomes `find_customers("Mary Brown")` then
 ## Deploy to Railway
 
 1. Push this repo to GitHub, then in Railway: **New Project → Deploy from GitHub repo**.
-   `railway.json` sets the build (`npm ci && npm run build`), start (`npm start`) and health check.
+   `railway.json` sets the build (`npm run build`; Nixpacks installs dependencies itself), start (`npm start`) and health check.
 2. Add a **Volume** to the service (service → Settings → Volumes) with mount path `/data`.
 3. Add a variable `DB_PATH=/data/app.db`. Railway sets `PORT` for you.
 4. Under **Settings → Networking → Generate Domain** to get a public URL.
