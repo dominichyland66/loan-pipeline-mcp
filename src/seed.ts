@@ -48,12 +48,15 @@ export function seedIfEmpty(): boolean {
     const priya = brokers.create("Priya Nair", "Castle Street Capital", "priya.nair@castlestreet.example");
 
     // Customers: personal borrowers have no company_name, business borrowers do.
-    const mary = customers.create("Mary Brown", "mary.brown@example.com");
-    const peter = customers.create("Peter Jones", "p.jones@example.com");
-    const omar = customers.create("Omar Siddiqui", "omar.s@example.com");
-    const helen = customers.create("Helen Cartwright", "helen@cartwrightdental.example", "Cartwright Dental Practice Ltd");
-    const sam = customers.create("Sam Patel", "sam@patel-eng.example", "Patel Engineering Ltd");
-    const jack = customers.create("Jack Greenfield", "jack@greenfieldfarms.example", "Greenfield Farms Ltd");
+    // Each has a real UK postcode with its coordinates (from postcodes.io) so the
+    // book can be plotted on a map without a network call at startup.
+    const at = (postcode: string, latitude: number, longitude: number, area: string) => ({ postcode, latitude, longitude, area });
+    const mary = customers.create("Mary Brown", "mary.brown@example.com", null, at("LS1 4AP", 53.795472, -1.555729, "Leeds"));
+    const peter = customers.create("Peter Jones", "p.jones@example.com", null, at("CF10 3NQ", 51.488373, -3.182582, "Cardiff"));
+    const omar = customers.create("Omar Siddiqui", "omar.s@example.com", null, at("B3 2TA", 52.482587, -1.899748, "Birmingham"));
+    const helen = customers.create("Helen Cartwright", "helen@cartwrightdental.example", "Cartwright Dental Practice Ltd", at("EH2 2BY", 55.952855, -3.192792, "City of Edinburgh"));
+    const sam = customers.create("Sam Patel", "sam@patel-eng.example", "Patel Engineering Ltd", at("M4 1HQ", 53.485087, -2.235862, "Manchester"));
+    const jack = customers.create("Jack Greenfield", "jack@greenfieldfarms.example", "Greenfield Farms Ltd", at("NR1 3PA", 52.623525, 1.295883, "Norwich"));
 
     const KYC = "KYC service";
     const AML = "AML screening";

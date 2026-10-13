@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { z } from "zod";
-import type { Broker, Customer, ApplicationRow, ApplicationEvent, StatusCount } from "./db.js";
+import type { Broker, Customer, CustomerLocation, ApplicationRow, ApplicationEvent, StatusCount } from "./db.js";
 import type { AccessLogRow, UsageSummary } from "./accesslog.js";
 import { STATUSES, LABELS, PIPELINE_TEXT } from "./pipeline.js";
 // Circular import with about.ts is safe: TOPICS is only used inside createMcpServer, never at module load.
@@ -9,16 +9,16 @@ import { TOPICS as ABOUT_TOPICS } from "./about.js";
 import {
   brokersTable, brokerCard, customersTable, customerCard,
   applicationsTable, searchTable, applicationCard, pipelineTable,
-  requestsTable, usageSummary,
+  requestsTable, usageSummary, locationsTable,
 } from "./format.js";
 
 /** Name of the MCP tool currently executing, so its API calls can be tagged in the access log. */
 const currentTool = new AsyncLocalStorage<string>();
 
 export const INSTRUCTIONS = `You manage a lender's loan application pipeline. Applications come in from brokers (introducers) or directly.
-Entities: customers (a person; business borrowers also have a company_name), brokers (person + firm), applications
-(one loan request: personal or business, amount in GBP, term in months, purpose, broker, status) and each application's
-event history (every status change with who did it and a note).
+Entities: customers (a person; business borrowers also have a company_name; each has a UK postcode with latitude/longitude),
+brokers (person + firm), applications (one loan request: personal or business, amount in GBP, term in months, purpose,
+broker, status) and each application's event history (every status change with who did it and a note).
 Pipeline (status ids): ${PIPELINE_TEXT}
 Workflow:
 - Resolve names first: find_customers (matches person or company), find_brokers (matches broker or firm). Use the ids.
@@ -29,6 +29,10 @@ Workflow:
   Only the allowed next moves are accepted; if a move is rejected the error lists what is allowed, so tell the user.
 - New application: a business loan needs a customer with a company_name; create a new business borrower with company_name set.
   "£25k over 5 years" = amount 25000, term_months 60. Amounts are GBP.
+- Where customers are ("where are our borrowers?", "plot the book on a map", "who do we have in the North West?"):
+  customer_locations returns every customer's postcode, area, latitude and longitude with their application totals.
+  To plot them, use the latitude/longitude pairs from structuredContent (one marker per customer, sized by amount if useful).
+  Setting a customer's postcode (add_customer / update_customer) geocodes it automatically; an unknown postcode is rejected.
 Dates: "last month" means since = today minus 30 days; "this week" = 7 days.
 Presentation: tool results contain a ready-made Markdown table. Show it as-is, with a one-line summary above it that
 answers the question (e.g. "Three applications worth £175,000 are awaiting an underwriter decision."). Use the Totals line.
@@ -45,7 +49,12 @@ const statusList = STATUSES.map((s) => `${s} (${LABELS[s]})`).join(", ");
 
 const BrokerShape = z.object({ id: z.number(), name: z.string(), firm: z.string(), email: z.string().nullable(), created_at: z.string() });
 const CustomerShape = z.object({
-  id: z.number(), name: z.string(), email: z.string().nullable(), company_name: z.string().nullable(), created_at: z.string(),
+  id: z.number(), name: z.string(), email: z.string().nullable(), company_name: z.string().nullable(),
+  postcode: z.string().nullable(), latitude: z.number().nullable(), longitude: z.number().nullable(), area: z.string().nullable(),
+  created_at: z.string(),
+});
+const CustomerLocationShape = CustomerShape.extend({
+  applications: z.number(), total_amount: z.number(), open_applications: z.number(), open_amount: z.number(),
 });
 const ApplicationShape = z.object({
   id: z.number(), customer_id: z.number(), broker_id: z.number().nullable(), type: LoanTypeSchema,
@@ -150,7 +159,7 @@ export function createMcpServer(apiBase: string, catalog?: ToolInfo[]): McpServe
       description:
         "Search customers by partial, case-insensitive person name or company name. Use this first to resolve " +
         "'Patel Engineering' or 'Mary Brown' to a customer id. Call with no search term to list every customer. " +
-        "Business borrowers have a company_name; personal borrowers do not. Returns a Markdown table.",
+        "Business borrowers have a company_name; personal borrowers do not. Returns a Markdown table including postcode and area.",
       inputSchema: { search: z.string().optional().describe("Part of the person's or company's name, e.g. 'patel'") },
       outputSchema: { kind: z.literal("customers"), customers: z.array(CustomerShape) },
       annotations: { readOnlyHint: true },
@@ -167,15 +176,17 @@ export function createMcpServer(apiBase: string, catalog?: ToolInfo[]): McpServe
       title: "Add customer",
       description:
         "Create a customer. For a business borrower pass company_name (the person is the contact/director); " +
-        "leave it out for a personal borrower. Returns the created customer including its id.",
+        "leave it out for a personal borrower. Pass a UK postcode where known: it is geocoded so the customer can be " +
+        "plotted on a map (an unknown postcode is rejected). Returns the created customer including its id.",
       inputSchema: {
         name: z.string().min(1).describe("Person's full name, e.g. 'Sam Patel'"),
         email: z.string().email().optional().describe("Optional email address"),
         company_name: z.string().min(1).optional().describe("Company name for business loans, e.g. 'Patel Engineering Ltd'. Omit for personal loans."),
+        postcode: z.string().optional().describe("UK postcode, e.g. 'LS1 4AP'"),
       },
     },
-    wrap(async ({ name, email, company_name }) => {
-      const c = await call<Customer>("POST", "/customers", { name, email, company_name });
+    wrap(async ({ name, email, company_name, postcode }) => {
+      const c = await call<Customer>("POST", "/customers", { name, email, company_name, postcode });
       return text(`Created customer #${c.id}.\n\n${customerCard(c)}`);
     }),
   );
@@ -185,22 +196,27 @@ export function createMcpServer(apiBase: string, catalog?: ToolInfo[]): McpServe
     {
       title: "Update customer",
       description:
-        "Change a customer's name, email and/or company name. Only the fields you pass are changed. " +
-        "Pass an empty string to clear email or company_name. Returns the updated customer.",
+        "Change a customer's name, email, company name and/or postcode. Only the fields you pass are changed. " +
+        "Pass an empty string to clear email, company_name or postcode. A new postcode is geocoded (unknown postcodes are rejected). " +
+        "Returns the updated customer.",
       inputSchema: {
         customer_id: z.number().int().positive().describe("Customer id from find_customers"),
         name: z.string().min(1).optional().describe("New full name"),
         email: z.string().optional().describe("New email address, or '' to clear"),
         company_name: z.string().optional().describe("New company name, or '' to clear (makes them a personal borrower)"),
+        postcode: z.string().optional().describe("New UK postcode, e.g. 'M4 1HQ', or '' to clear"),
       },
       annotations: { idempotentHint: true },
     },
-    wrap(async ({ customer_id, name, email, company_name }) => {
-      if (name === undefined && email === undefined && company_name === undefined) throw new Error("Provide a new name, email and/or company_name.");
+    wrap(async ({ customer_id, name, email, company_name, postcode }) => {
+      if (name === undefined && email === undefined && company_name === undefined && postcode === undefined) {
+        throw new Error("Provide a new name, email, company_name and/or postcode.");
+      }
       const body: Record<string, unknown> = {};
       if (name !== undefined) body.name = name;
       if (email !== undefined) body.email = email === "" ? null : email;
       if (company_name !== undefined) body.company_name = company_name === "" ? null : company_name;
+      if (postcode !== undefined) body.postcode = postcode === "" ? null : postcode;
       const c = await call<Customer>("PATCH", `/customers/${customer_id}`, body);
       return text(`Updated customer #${c.id}.\n\n${customerCard(c)}`);
     }),
@@ -217,6 +233,30 @@ export function createMcpServer(apiBase: string, catalog?: ToolInfo[]): McpServe
     wrap(async ({ customer_id }) => {
       await call("DELETE", `/customers/${customer_id}`);
       return text(`Deleted customer #${customer_id} and their applications.`);
+    }),
+  );
+
+  tool(
+    "customer_locations",
+    {
+      title: "Customer locations for a map",
+      description:
+        "Every customer's postcode, area and latitude/longitude together with how many applications they have, the " +
+        "total requested and how much is still open. Use for 'where are our customers?', 'plot the book on a map', " +
+        "'who do we have in Leeds?'. structuredContent.customers carries the coordinates to plot (WGS84). Optionally " +
+        "filter to personal or business borrowers, or search by name, company, area or postcode.",
+      inputSchema: {
+        type: LoanTypeSchema.optional().describe("'personal' or 'business' borrowers only"),
+        search: z.string().optional().describe("Partial name, company, area (e.g. 'Leeds') or postcode"),
+        located: z.boolean().optional().describe("true = only customers that have coordinates"),
+      },
+      outputSchema: { kind: z.literal("locations"), customers: z.array(CustomerLocationShape) },
+      annotations: { readOnlyHint: true },
+    },
+    wrap(async (args) => {
+      const rows = await call<CustomerLocation[]>("GET", `/customers/locations${query(args)}`);
+      const filters = Object.fromEntries(Object.entries(args).filter(([, v]) => v !== undefined)) as Record<string, string | boolean>;
+      return text(locationsTable(rows, filters), { kind: "locations", customers: rows });
     }),
   );
 

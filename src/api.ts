@@ -1,6 +1,7 @@
 import { Router, type Request, type Response, type NextFunction } from "express";
 import { z } from "zod";
-import { brokers, customers, applications } from "./db.js";
+import { brokers, customers, applications, type Location } from "./db.js";
+import { geocodePostcode } from "./geocode.js";
 import { STATUSES, LABELS, TRANSITIONS } from "./pipeline.js";
 import { about, aboutTopic, TOPICS, type Topic } from "./about.js";
 import { logs } from "./accesslog.js";
@@ -25,10 +26,40 @@ const CustomerInput = z.object({
   name: z.string().min(1, "name is required"),
   email: z.string().email().optional().nullable(),
   company_name: z.string().optional().nullable(),
+  postcode: z.string().optional().nullable(),   // UK postcode; geocoded via postcodes.io
 });
 const CustomerUpdate = z
-  .object({ name: z.string().min(1).optional(), email: z.string().email().optional().nullable(), company_name: z.string().optional().nullable() })
-  .refine(atLeastOne(["name", "email", "company_name"]), { message: "provide at least one of name, email, company_name" });
+  .object({
+    name: z.string().min(1).optional(),
+    email: z.string().email().optional().nullable(),
+    company_name: z.string().optional().nullable(),
+    postcode: z.string().optional().nullable(),
+  })
+  .refine(atLeastOne(["name", "email", "company_name", "postcode"]), { message: "provide at least one of name, email, company_name, postcode" });
+const LocationsQuery = z.object({
+  type: LoanTypeSchema.optional(),
+  search: z.string().optional(),
+  located: z.preprocess((v) => (v === "true" ? true : v === "false" ? false : v), z.boolean().optional()),
+  format: z.enum(["json", "geojson"]).optional(),
+});
+
+/**
+ * Turns a postcode from a request body into a Location: undefined = not
+ * mentioned (leave as is), null = clear it. Responds with the error itself and
+ * returns false when the postcode is unusable.
+ */
+async function resolveLocation(postcode: string | null | undefined, res: Response): Promise<Location | null | undefined | false> {
+  if (postcode === undefined) return undefined;
+  if (postcode === null || postcode.trim() === "") return null;
+  const result = await geocodePostcode(postcode);
+  if (result.ok) return result.location;
+  if (result.reason === "invalid_postcode") {
+    res.status(400).json({ error: "invalid_postcode", message: `'${postcode}' is not a UK postcode we can locate.` });
+  } else {
+    res.status(502).json({ error: "geocoding_unavailable", message: `Could not look up '${postcode}': ${result.message}. Try again shortly.` });
+  }
+  return false;
+}
 
 const ApplicationInput = z.object({
   type: LoanTypeSchema.optional(),              // defaults from the customer: company_name set → business
@@ -131,11 +162,32 @@ api.get("/customers", (req, res) => {
   res.json(customers.list(search));
 });
 
-// POST /api/customers { name, email?, company_name? }
-api.post("/customers", (req, res) => {
+// POST /api/customers { name, email?, company_name?, postcode? }
+api.post("/customers", async (req, res) => {
   const body = parse(CustomerInput, req.body, res);
   if (!body) return;
-  res.status(201).json(customers.create(body.name, body.email, body.company_name));
+  const location = await resolveLocation(body.postcode, res);
+  if (location === false) return;
+  res.status(201).json(customers.create(body.name, body.email, body.company_name, location));
+});
+
+// GET /api/customers/locations?type=business&search=leeds&located=true&format=geojson
+//   → every customer with postcode, coordinates and application totals, for plotting on a map
+api.get("/customers/locations", (req, res) => {
+  const query = parse(LocationsQuery, req.query, res);
+  if (!query) return;
+  const rows = customers.locations(query);
+  if (query.format !== "geojson") return res.json(rows);
+  res.json({
+    type: "FeatureCollection",
+    features: rows
+      .filter((c) => c.latitude !== null && c.longitude !== null)
+      .map(({ latitude, longitude, ...props }) => ({
+        type: "Feature",
+        geometry: { type: "Point", coordinates: [longitude, latitude] },
+        properties: { ...props, type: props.company_name ? "business" : "personal" },
+      })),
+  });
 });
 
 api.get("/customers/:id", (req, res) => {
@@ -146,13 +198,16 @@ api.get("/customers/:id", (req, res) => {
   res.json(customer);
 });
 
-// PATCH /api/customers/:id { name?, email?, company_name? }  (null clears)
-api.patch("/customers/:id", (req, res) => {
+// PATCH /api/customers/:id { name?, email?, company_name?, postcode? }  (null clears)
+api.patch("/customers/:id", async (req, res) => {
   const id = parse(idParam, req.params.id, res);
   if (id === undefined) return;
   const body = parse(CustomerUpdate, req.body, res);
   if (!body) return;
-  const updated = customers.update(id, body);
+  const location = await resolveLocation(body.postcode, res);
+  if (location === false) return;
+  const { postcode: _postcode, ...rest } = body;
+  const updated = customers.update(id, { ...rest, location });
   if (!updated) return res.status(404).json({ error: "customer_not_found" });
   res.json(updated);
 });

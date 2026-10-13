@@ -31,10 +31,14 @@ const broker = show("add_broker", await call("add_broker", { name: "Smoke Tester
 const brokerId = idIn(broker, "broker");
 show("find_brokers smoke", await call("find_brokers", { search: "smoke & co" }));
 
-const cust = show("add_customer (business)", await call("add_customer", { name: "Tess Smoke", email: "tess@smokewidgets.example", company_name: "Smoke Widgets Ltd" }));
+const cust = show("add_customer (business, with postcode)", await call("add_customer", { name: "Tess Smoke", email: "tess@smokewidgets.example", company_name: "Smoke Widgets Ltd", postcode: "bs1 5tr" }));
 const customerId = idIn(cust, "customer");
 show("find_customers by company", await call("find_customers", { search: "smoke widgets" }));
 show("update_customer email", await call("update_customer", { customer_id: customerId, email: "finance@smokewidgets.example" }));
+show("update_customer bad postcode (error)", await call("update_customer", { customer_id: customerId, postcode: "ZZ99 9ZZ" }), true);
+show("update_customer postcode", await call("update_customer", { customer_id: customerId, postcode: "L3 9AG" }));
+show("customer_locations search bristol/liverpool", await call("customer_locations", { search: "liverpool" }));
+show("customer_locations business only", await call("customer_locations", { type: "business", located: true }));
 show("update_customer nothing (error)", await call("update_customer", { customer_id: customerId }), true);
 
 // --- Walk an application through the whole pipeline --------------------------

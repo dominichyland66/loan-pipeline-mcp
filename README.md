@@ -20,6 +20,8 @@ One Node/TypeScript process serves both:
 
 - **Customers** are people. A business borrower also has a `company_name`
   (e.g. Sam Patel of *Patel Engineering Ltd*); personal borrowers leave it blank.
+  Every customer has a real UK `postcode`, geocoded (via postcodes.io) to
+  `latitude`, `longitude` and `area` so the book can be plotted on a map.
 - **Brokers** (introducers) are a person plus the firm they work for. Each
   application records the broker who introduced it, or none for direct business.
 - **Applications** are one loan request: `personal` or `business`, amount in
@@ -96,8 +98,9 @@ back-dated histories, one at each stage:
 | POST   | `/api/brokers`                         | `{ "name": "Alice Khan", "firm": "Northgate Finance", "email": "..." }` |
 | GET/PATCH/DELETE | `/api/brokers/:id`           | PATCH any subset of name, firm, email; DELETE leaves their applications as direct |
 | GET    | `/api/customers?search=patel`          | partial match on person or company name        |
-| POST   | `/api/customers`                       | `{ "name": "Sam Patel", "email": "...", "company_name": "Patel Engineering Ltd" }` (omit company_name for personal) |
-| GET/PATCH/DELETE | `/api/customers/:id`         | PATCH any subset; `null` clears email/company_name; DELETE cascades to applications |
+| POST   | `/api/customers`                       | `{ "name": "Sam Patel", "email": "...", "company_name": "Patel Engineering Ltd", "postcode": "M4 1HQ" }` (omit company_name for personal); postcode is geocoded, 400 `invalid_postcode` if unknown |
+| GET    | `/api/customers/locations`             | every customer with postcode, lat/lng, area and application totals: `?type=&search=&located=true&format=geojson` |
+| GET/PATCH/DELETE | `/api/customers/:id`         | PATCH any subset; `null` clears email/company_name/postcode; DELETE cascades to applications |
 | GET    | `/api/customers/:id/applications`      | `?status=funded`                               |
 | POST   | `/api/customers/:id/applications`      | `{ "amount": 25000, "term_months": 60, "purpose": "Van", "broker_id": 1, "type": "business", "note": "..." }`; type defaults from the customer |
 | GET    | `/api/applications`                    | `?status=&open=true&customer=&broker=&type=&since=&until=` across all customers |
@@ -107,7 +110,8 @@ back-dated histories, one at each stage:
 | DELETE | `/api/applications/:id`                |                                                |
 
 ```bash
-curl -X POST localhost:3000/api/customers -H 'content-type: application/json' -d '{"name":"Ann Lee","company_name":"Lee Logistics Ltd"}'
+curl -X POST localhost:3000/api/customers -H 'content-type: application/json' -d '{"name":"Ann Lee","company_name":"Lee Logistics Ltd","postcode":"L3 9AG"}'
+curl 'localhost:3000/api/customers/locations?format=geojson'
 curl -X POST localhost:3000/api/customers/7/applications -H 'content-type: application/json' -d '{"amount":40000,"term_months":48,"purpose":"Trailer","broker_id":1}'
 curl -X POST localhost:3000/api/applications/13/transition -H 'content-type: application/json' -d '{"status":"kyc_passed","actor":"KYC service"}'
 curl 'localhost:3000/api/applications?status=awaiting_underwriter'
@@ -122,9 +126,10 @@ per-broker breakdown for searches), and the server sends Claude
 | Tool                  | Purpose                                                               |
 | --------------------- | --------------------------------------------------------------------- |
 | `find_customers`      | Resolve a person or company name to a customer id                     |
-| `add_customer`        | Create a borrower (`company_name` for business)                       |
-| `update_customer`     | Change name, email or company name                                    |
+| `add_customer`        | Create a borrower (`company_name` for business, `postcode` geocoded)  |
+| `update_customer`     | Change name, email, company name or postcode                          |
 | `delete_customer`     | Delete a customer and their applications                              |
+| `customer_locations`  | Every customer's postcode and lat/lng with application totals, for a map |
 | `find_brokers`        | Resolve a broker or firm name to a broker id                          |
 | `add_broker`          | Register a broker                                                     |
 | `delete_broker`       | Delete a broker (their applications become direct)                    |
@@ -222,6 +227,7 @@ src/pipeline.ts SQLite-independent pipeline definition: statuses, labels, allowe
 src/db.ts       SQLite schema + queries (built-in node:sqlite, no native build)
 src/api.ts      Express router for /api
 src/mcp.ts      MCP tools, each one an HTTP call to /api; server instructions
+src/geocode.ts  UK postcode lookup on postcodes.io
 src/format.ts   Markdown table rendering for tool results
 src/about.ts    self-description served at /api/about and by explain_system (introspects schema, routes, tools)
 src/metrics.ts  request context + SQLite instrumentation (times every statement, attributes it to the request)

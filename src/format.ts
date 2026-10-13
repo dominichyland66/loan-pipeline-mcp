@@ -1,4 +1,4 @@
-import type { Broker, Customer, ApplicationRow, ApplicationEvent, StatusCount } from "./db.js";
+import type { Broker, Customer, CustomerLocation, ApplicationRow, ApplicationEvent, StatusCount } from "./db.js";
 import type { AccessLogRow, UsageSummary } from "./accesslog.js";
 import { type Status, LABELS, TRANSITIONS, statusWithIcon, isOpen } from "./pipeline.js";
 
@@ -35,13 +35,35 @@ export const brokerCard = (b: Broker) => brokersTable([b]);
 
 export function customersTable(rows: Customer[]): string {
   if (rows.length === 0) return "_No customers found._";
-  const lines = ["| ID | Name | Company | Type | Email | Since |", "|---:|------|---------|------|-------|-------|"];
+  const lines = ["| ID | Name | Company | Type | Email | Postcode | Area | Since |", "|---:|------|---------|------|-------|----------|------|-------|"];
   for (const c of rows) {
-    lines.push(`| ${c.id} | **${esc(c.name)}** | ${dash(c.company_name)} | ${c.company_name ? "Business" : "Personal"} | ${dash(c.email)} | ${day(c.created_at)} |`);
+    lines.push(`| ${c.id} | **${esc(c.name)}** | ${dash(c.company_name)} | ${c.company_name ? "Business" : "Personal"} | ${dash(c.email)} | ${dash(c.postcode)} | ${dash(c.area)} | ${day(c.created_at)} |`);
   }
   return lines.join("\n");
 }
 export const customerCard = (c: Customer) => customersTable([c]);
+
+/** Customers with coordinates and application totals, for a map. */
+export function locationsTable(rows: CustomerLocation[], filters: Record<string, string | boolean | undefined> = {}): string {
+  const desc = filterDesc(filters);
+  const title = `**Customer locations**${desc ? ` (${desc})` : ""}\n\n`;
+  if (rows.length === 0) return title + "_No customers found._";
+  const lines = [
+    "| ID | Customer | Type | Postcode | Area | Lat | Lng | Applications | Requested | Open |",
+    "|---:|----------|------|----------|------|----:|----:|-------------:|----------:|-----:|",
+  ];
+  for (const c of rows) {
+    lines.push(`| ${c.id} | ${borrower(c.name, c.company_name)} | ${c.company_name ? "Business" : "Personal"} | ${dash(c.postcode)} | ${dash(c.area)} | ` +
+      `${c.latitude === null ? "—" : c.latitude.toFixed(5)} | ${c.longitude === null ? "—" : c.longitude.toFixed(5)} | ${c.applications} | ${money(c.total_amount)} | ${money(c.open_amount)} |`);
+  }
+  const located = rows.filter((c) => c.latitude !== null);
+  const missing = rows.filter((c) => c.latitude === null);
+  const total = rows.reduce((n, c) => n + c.total_amount, 0);
+  const openTotal = rows.reduce((n, c) => n + c.open_amount, 0);
+  lines.push("", `Totals: **${rows.length}** customer${rows.length === 1 ? "" : "s"}, ${located.length} with coordinates, **${money(total)}** requested in total (${money(openTotal)} open)` +
+    (missing.length ? ` · no postcode: ${missing.map((c) => `${c.name} (#${c.id})`).join(", ")}` : ""));
+  return lines.join("\n");
+}
 
 // --- Applications ------------------------------------------------------------
 

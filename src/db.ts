@@ -35,6 +35,10 @@ db.exec(`
     name         TEXT NOT NULL,
     email        TEXT,
     company_name TEXT,                 -- set for business borrowers, NULL for personal
+    postcode     TEXT,                 -- UK postcode, normalised e.g. 'LS1 4AP'
+    latitude     REAL,                 -- WGS84, from postcodes.io (or the seed), for plotting on a map
+    longitude    REAL,
+    area         TEXT,                 -- admin district the postcode falls in, e.g. 'Leeds'
     created_at   TEXT NOT NULL DEFAULT (${NOW})
   );
 
@@ -66,6 +70,14 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_events_application    ON application_events(application_id, created_at);
 `);
 
+// Databases created before the location columns existed get them added in place.
+{
+  const have = new Set((db.prepare("PRAGMA table_info(customers)").all() as unknown as { name: string }[]).map((c) => c.name));
+  for (const [col, type] of [["postcode", "TEXT"], ["latitude", "REAL"], ["longitude", "REAL"], ["area", "TEXT"]] as const) {
+    if (!have.has(col)) db.exec(`ALTER TABLE customers ADD COLUMN ${col} ${type}`);
+  }
+}
+
 export type LoanType = "personal" | "business";
 
 export interface Broker {
@@ -76,13 +88,29 @@ export interface Broker {
   created_at: string;
 }
 
-export interface Customer {
+/** Where a customer is: a UK postcode plus its coordinates, all null when unknown. */
+export interface Location {
+  postcode: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  area: string | null;
+}
+
+export interface Customer extends Location {
   id: number;
   name: string;
   email: string | null;
   company_name: string | null;
   created_at: string;
 }
+
+/** A customer with coordinates plus their application totals, for plotting on a map. */
+export type CustomerLocation = Customer & {
+  applications: number;
+  total_amount: number;
+  open_applications: number;
+  open_amount: number;
+};
 
 export interface Application {
   id: number;
@@ -135,6 +163,7 @@ export function transaction<T>(fn: () => T): T {
 }
 
 const clean = (s: string | null | undefined) => s?.trim() || null;
+const NO_LOCATION: Location = { postcode: null, latitude: null, longitude: null, area: null };
 
 // --- Brokers -----------------------------------------------------------------
 
@@ -185,21 +214,54 @@ export const customers = {
   get(id: number): Customer | undefined {
     return db.prepare("SELECT * FROM customers WHERE id = ?").get(id) as unknown as Customer | undefined;
   },
-  create(name: string, email?: string | null, companyName?: string | null): Customer {
+  create(name: string, email?: string | null, companyName?: string | null, location?: Location | null): Customer {
+    const loc = location ?? NO_LOCATION;
     const info = db
-      .prepare("INSERT INTO customers (name, email, company_name) VALUES (?, ?, ?)")
-      .run(name.trim(), clean(email), clean(companyName));
+      .prepare("INSERT INTO customers (name, email, company_name, postcode, latitude, longitude, area) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(name.trim(), clean(email), clean(companyName), loc.postcode, loc.latitude, loc.longitude, loc.area);
     return this.get(Number(info.lastInsertRowid))!;
   },
-  update(id: number, changes: { name?: string; email?: string | null; company_name?: string | null }): Customer | undefined {
+  /** `location` undefined = leave as is; null = clear the postcode and coordinates. */
+  update(id: number, changes: { name?: string; email?: string | null; company_name?: string | null; location?: Location | null }): Customer | undefined {
     const existing = this.get(id);
     if (!existing) return undefined;
     const name = changes.name !== undefined ? changes.name.trim() : existing.name;
     // undefined = leave as is, null or "" = clear it
     const email = changes.email !== undefined ? clean(changes.email) : existing.email;
     const company = changes.company_name !== undefined ? clean(changes.company_name) : existing.company_name;
-    db.prepare("UPDATE customers SET name = ?, email = ?, company_name = ? WHERE id = ?").run(name, email, company, id);
+    const loc: Location = changes.location === undefined ? existing : (changes.location ?? NO_LOCATION);
+    db.prepare("UPDATE customers SET name = ?, email = ?, company_name = ?, postcode = ?, latitude = ?, longitude = ?, area = ? WHERE id = ?")
+      .run(name, email, company, loc.postcode, loc.latitude, loc.longitude, loc.area, id);
     return this.get(id);
+  },
+  /**
+   * Every customer with their application totals, for a map. Customers without
+   * coordinates are included (so the caller can say who is missing a postcode)
+   * unless `located` is true.
+   */
+  locations(opts: { type?: LoanType; search?: string; located?: boolean } = {}): CustomerLocation[] {
+    const where: string[] = [];
+    const params: (string | number)[] = [];
+    if (opts.type === "business") where.push("c.company_name IS NOT NULL");
+    if (opts.type === "personal") where.push("c.company_name IS NULL");
+    if (opts.search?.trim()) {
+      where.push("(c.name LIKE ? COLLATE NOCASE OR c.company_name LIKE ? COLLATE NOCASE OR c.area LIKE ? COLLATE NOCASE OR c.postcode LIKE ? COLLATE NOCASE)");
+      const q = `%${opts.search.trim()}%`;
+      params.push(q, q, q, q);
+    }
+    if (opts.located) where.push("c.latitude IS NOT NULL");
+    const open = STATUSES.filter((s) => TRANSITIONS[s].length > 0).map((s) => `'${s}'`).join(",");
+    return db.prepare(`
+      SELECT c.*,
+             COUNT(a.id)                                                   AS applications,
+             COALESCE(SUM(a.amount), 0)                                    AS total_amount,
+             COALESCE(SUM(CASE WHEN a.status IN (${open}) THEN 1 END), 0)  AS open_applications,
+             COALESCE(SUM(CASE WHEN a.status IN (${open}) THEN a.amount END), 0) AS open_amount
+      FROM customers c
+      LEFT JOIN applications a ON a.customer_id = c.id
+      ${where.length ? "WHERE " + where.join(" AND ") : ""}
+      GROUP BY c.id
+      ORDER BY c.name`).all(...params) as unknown as CustomerLocation[];
   },
   delete(id: number): boolean {
     return db.prepare("DELETE FROM customers WHERE id = ?").run(id).changes > 0;
