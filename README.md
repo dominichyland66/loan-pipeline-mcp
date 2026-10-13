@@ -18,7 +18,7 @@ One Node/TypeScript process serves both:
 
 ```bash
 npm install
-npm run dev          # http://localhost:3000 (builds the widget first)
+npm run dev          # http://localhost:3000
 npm run seed         # optional demo data (Mary Brown, Peter Jones, Sam Patel)
 npm run smoke        # drives every MCP tool through a real MCP client
 ```
@@ -52,10 +52,7 @@ curl 'localhost:3000/api/customers/1/orders?product=apple'
 
 Every tool returns a ready-made **Markdown table** (with per-product totals for
 orders), and the server sends Claude **instructions** on how to chain the tools
-and to show those tables as-is. `find_customers`, `list_orders` and `search_orders` additionally
-carry an **MCP App widget**: hosts that support MCP Apps (claude.ai and Claude
-Desktop) render a styled, colourful table inside the chat; other hosts just
-show the Markdown.
+and to show those tables as-is.
 
 | Tool              | Purpose                                                        |
 | ----------------- | -------------------------------------------------------------- |
@@ -121,10 +118,9 @@ Then try:
 ```
 src/db.ts       SQLite schema + queries (built-in node:sqlite, no native build)
 src/api.ts      Express router for /api
-src/mcp.ts      MCP tools, each one an HTTP call to /api; server instructions; widget resource
+src/mcp.ts      MCP tools, each one an HTTP call to /api; server instructions
 src/format.ts   Markdown table rendering for tool results
-src/widget/     MCP App widget (HTML + TS), bundled by scripts/build-widget.mjs into dist/widget.html
 src/server.ts   Wires both into one Express app
 src/seed.ts     demo data, applied automatically to an empty database
-scripts/        seed.ts (manual seed), smoke-mcp.ts (MCP client test), build-widget.mjs
+scripts/        seed.ts (manual seed), smoke-mcp.ts (MCP client test)
 ```

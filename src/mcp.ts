@@ -1,7 +1,4 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { registerAppTool, registerAppResource, RESOURCE_MIME_TYPE, EXTENSION_ID } from "@modelcontextprotocol/ext-apps/server";
-import fs from "node:fs";
-import path from "node:path";
 import { z } from "zod";
 import type { Customer, Order, OrderWithCustomer } from "./db.js";
 import { customersTable, customerCard, ordersTable, orderCard, searchTable } from "./format.js";
@@ -11,21 +8,10 @@ Workflow: for questions about one person, resolve them with find_customers first
 For questions across customers ("who bought cheese?", "what was ordered this week?") use search_orders directly.
 Quantities: "2kg of apples" = product "apples", quantity 2, unit "kg". Countable items use unit "each".
 Dates: list_orders accepts ISO dates; "last month" means since = today minus 30 days.
-Presentation: tool results contain a Markdown table. If the host rendered the result as an interactive
-widget in the chat, do NOT repeat the table or list the rows; reply with one or two sentences that answer
-the question (e.g. "Mary Brown bought 18 bananas in the last month, across 2 orders."). If no widget was
-rendered, show the Markdown table as-is with a one-line summary above it. Use the Totals line when summing.
+Presentation: tool results contain a ready-made Markdown table. Show it as-is, with a one-line summary
+above it that answers the question (e.g. "Mary Brown bought 18 bananas in the last month, across 2 orders.").
+Use the Totals line when summing.
 Always confirm with the user before delete_customer.`;
-
-// The MCP App widget (an HTML page rendered inside the chat by hosts that
-// support MCP Apps). Built by scripts/build-widget.mjs into dist/widget.html.
-const WIDGET_URI = "ui://customer-orders/table.html";
-const WIDGET_PATH = path.join(process.cwd(), "dist", "widget.html");
-let widgetHtml: string | undefined;
-function loadWidget(): string {
-  widgetHtml ??= fs.readFileSync(WIDGET_PATH, "utf8");
-  return widgetHtml;
-}
 
 const CustomerShape = z.object({
   id: z.number(), name: z.string(), email: z.string().nullable(), created_at: z.string(),
@@ -43,15 +29,7 @@ const OrderShape = z.object({
 export function createMcpServer(apiBase: string): McpServer {
   const server = new McpServer(
     { name: "customer-orders", version: "1.0.0" },
-    {
-      instructions: INSTRUCTIONS,
-      // Advertise MCP Apps support in the initialize response. registerAppTool
-      // only sets tool metadata; some hosts (Claude Desktop) also need this
-      // capability declared before they will render ui:// resources.
-      capabilities: {
-        extensions: { [EXTENSION_ID]: { mimeTypes: [RESOURCE_MIME_TYPE] } },
-      } as Record<string, unknown>,
-    },
+    { instructions: INSTRUCTIONS },
   );
 
   async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -89,20 +67,17 @@ export function createMcpServer(apiBase: string): McpServer {
 
   // --- Customers -------------------------------------------------------------
 
-  registerAppTool(
-    server,
+  server.registerTool(
     "find_customers",
     {
       title: "Find customers",
       description:
         "Search customers by (partial, case-insensitive) name. Use this first to resolve a name such as " +
         "'Mr Jones' or 'Mary Brown' to a customer id before adding or listing orders. " +
-        "Call with no search term to list every customer. Returns a Markdown table." +
-        " If this result is shown as an interactive widget, answer in a sentence or two and do not repeat the table.",
+        "Call with no search term to list every customer. Returns a Markdown table.",
       inputSchema: { search: z.string().optional().describe("Part of the customer's name, e.g. 'jones'") },
       outputSchema: { kind: z.literal("customers"), customers: z.array(CustomerShape) },
       annotations: { readOnlyHint: true },
-      _meta: { ui: { resourceUri: WIDGET_URI } },
     },
     wrap(async ({ search }) => {
       const customers = await call<Customer[]>("GET", `/customers${search ? `?search=${encodeURIComponent(search)}` : ""}`);
@@ -166,8 +141,7 @@ export function createMcpServer(apiBase: string): McpServer {
 
   // --- Orders ----------------------------------------------------------------
 
-  registerAppTool(
-    server,
+  server.registerTool(
     "list_orders",
     {
       title: "List orders for a customer",
@@ -175,8 +149,7 @@ export function createMcpServer(apiBase: string): McpServer {
         "List a customer's orders, newest first, as a Markdown table with per-product totals. " +
         "Optionally filter by product name and/or a date range (ISO 8601, e.g. '2026-09-13'). " +
         "To answer 'how many bananas did X buy last month', filter by product='banana' and since=<30 days ago> " +
-        "and read the Totals line." +
-        " If this result is shown as an interactive widget, answer in a sentence or two and do not repeat the table.",
+        "and read the Totals line.",
       inputSchema: {
         customer_id: z.number().int().positive().describe("Customer id from find_customers"),
         product: z.string().optional().describe("Partial product name filter, e.g. 'banana'"),
@@ -190,7 +163,6 @@ export function createMcpServer(apiBase: string): McpServer {
         orders: z.array(OrderShape),
       },
       annotations: { readOnlyHint: true },
-      _meta: { ui: { resourceUri: WIDGET_URI } },
     },
     wrap(async ({ customer_id, product, since, until }) => {
       const qs = new URLSearchParams();
@@ -207,16 +179,14 @@ export function createMcpServer(apiBase: string): McpServer {
     }),
   );
 
-  registerAppTool(
-    server,
+  server.registerTool(
     "search_orders",
     {
       title: "Search orders across all customers",
       description:
         "Search orders across every customer, newest first, as a Markdown table with a Customer column and " +
         "per-customer totals. Answers questions like 'who bought cheese?' or 'what was ordered in the last week?'. " +
-        "Filters are optional and combine: product (partial name), customer (partial name), since/until (ISO dates)." +
-        " If this result is shown as an interactive widget, answer in a sentence or two and do not repeat the table.",
+        "Filters are optional and combine: product (partial name), customer (partial name), since/until (ISO dates).",
       inputSchema: {
         product: z.string().optional().describe("Partial product name, e.g. 'cheese'"),
         customer: z.string().optional().describe("Partial customer name, e.g. 'brown'"),
@@ -229,7 +199,6 @@ export function createMcpServer(apiBase: string): McpServer {
         orders: z.array(OrderShape.extend({ customer_name: z.string() })),
       },
       annotations: { readOnlyHint: true },
-      _meta: { ui: { resourceUri: WIDGET_URI } },
     },
     wrap(async ({ product, customer, since, until }) => {
       const qs = new URLSearchParams();
@@ -301,14 +270,6 @@ export function createMcpServer(apiBase: string): McpServer {
       return text(`Deleted order #${order_id}.`);
     }),
   );
-
-  // --- MCP App widget ----------------------------------------------------------
-  // Hosts that support MCP Apps (claude.ai, Claude Desktop) fetch this resource
-  // and render it in an iframe next to the find_customers / list_orders result.
-  // Other hosts ignore the _meta and just show the Markdown table.
-  registerAppResource(server, "Customer orders table", WIDGET_URI, { mimeType: RESOURCE_MIME_TYPE }, async () => ({
-    contents: [{ uri: WIDGET_URI, mimeType: RESOURCE_MIME_TYPE, text: loadWidget() }],
-  }));
 
   return server;
 }

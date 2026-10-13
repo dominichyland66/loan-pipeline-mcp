@@ -13,16 +13,6 @@ console.log("INSTRUCTIONS:", instructions ? `${instructions.split("\n")[0]} …`
 
 const tools = await client.listTools();
 console.log("TOOLS:", tools.tools.map((t) => t.name).join(", "));
-const withUi = tools.tools.filter((t) => (t._meta as any)?.ui?.resourceUri).map((t) => t.name);
-console.log("TOOLS WITH WIDGET:", withUi.join(", ") || "(none)");
-
-const resources = await client.listResources();
-console.log("RESOURCES:", resources.resources.map((r) => `${r.uri} [${r.mimeType}]`).join(", ") || "(none)");
-if (resources.resources[0]) {
-  const read = await client.readResource({ uri: resources.resources[0].uri });
-  const html = (read.contents[0] as { text?: string }).text ?? "";
-  console.log(`WIDGET HTML: ${(html.length / 1024).toFixed(0)} KB, starts "${html.slice(0, 15)}"`);
-}
 
 const show = (label: string, r: any) =>
   console.log(`\n== ${label}\n` + r.content.map((c: any) => c.text).join("\n") + (r.isError ? "\n(isError)" : "") +
