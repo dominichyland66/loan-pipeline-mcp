@@ -32,6 +32,7 @@ Data lives in `./data/app.db` (override with `DB_PATH`).
 | GET    | `/api/customers?search=jones`      | optional partial, case-insensitive name search |
 | POST   | `/api/customers`                   | `{ "name": "Mary Brown", "email": "..." }`     |
 | GET    | `/api/customers/:id`               |                                                |
+| PATCH  | `/api/customers/:id`               | `{ "name": "...", "email": "..." }` any subset; `"email": null` clears |
 | DELETE | `/api/customers/:id`               | also deletes that customer's orders            |
 | GET    | `/api/customers/:id/orders`        | `?product=banana&since=2026-09-13&until=...`   |
 | POST   | `/api/customers/:id/orders`        | `{ "product": "apples", "quantity": 2, "unit": "kg" }` |
@@ -49,6 +50,7 @@ curl 'localhost:3000/api/customers/1/orders?product=apple'
 | ----------------- | -------------------------------------------------------------- |
 | `find_customers`  | Resolve "Mr Jones" to a customer id (partial name search)      |
 | `add_customer`    | Create a customer                                              |
+| `update_customer` | Change a customer's name and/or email                          |
 | `delete_customer` | Delete a customer and their orders                             |
 | `list_orders`     | Orders for a customer, filterable by product and date range    |
 | `add_order`       | Record an order: product, quantity, unit                       |
@@ -94,6 +96,7 @@ Then try:
 - "Can you add an order for Mr Jones of 2kg of apples?"
 - "How many bananas has Mary Brown bought in the last month?"
 - "Add a new customer called Jane Smith and record that she bought 3 litres of milk."
+- "Update Mary Brown's email to mary@newmail.com."
 
 ## Layout
 

@@ -82,6 +82,15 @@ export const customers = {
       .run(name.trim(), email?.trim() || null);
     return this.get(Number(info.lastInsertRowid))!;
   },
+  update(id: number, changes: { name?: string; email?: string | null }): Customer | undefined {
+    const existing = this.get(id);
+    if (!existing) return undefined;
+    const name = changes.name !== undefined ? changes.name.trim() : existing.name;
+    // email: undefined = leave as is, null or "" = clear it
+    const email = changes.email !== undefined ? changes.email?.trim() || null : existing.email;
+    db.prepare("UPDATE customers SET name = ?, email = ? WHERE id = ?").run(name, email, id);
+    return this.get(id);
+  },
   delete(id: number): boolean {
     return db.prepare("DELETE FROM customers WHERE id = ?").run(id).changes > 0;
   },

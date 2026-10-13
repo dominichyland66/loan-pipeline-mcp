@@ -17,6 +17,9 @@ show("add_customer", await client.callTool({ name: "add_customer", arguments: { 
 const found: any = await client.callTool({ name: "find_customers", arguments: { search: "jones" } });
 show("find_customers jones", found);
 const jones = JSON.parse(found.content[0].text)[0];
+show("update_customer rename + email", await client.callTool({ name: "update_customer", arguments: { customer_id: jones.id, name: "Mr P Jones", email: "pj@example.com" } }));
+show("update_customer clear email", await client.callTool({ name: "update_customer", arguments: { customer_id: jones.id, email: "" } }));
+show("update_customer nothing (error)", await client.callTool({ name: "update_customer", arguments: { customer_id: jones.id } }));
 show("add_order 2kg apples", await client.callTool({ name: "add_order", arguments: { customer_id: jones.id, product: "apples", quantity: 2, unit: "kg" } }));
 const mary: any = await client.callTool({ name: "find_customers", arguments: { search: "mary brown" } });
 const maryId = JSON.parse(mary.content[0].text)[0].id;

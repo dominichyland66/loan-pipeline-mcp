@@ -11,6 +11,15 @@ const CustomerInput = z.object({
   email: z.string().email().optional().nullable(),
 });
 
+const CustomerUpdate = z
+  .object({
+    name: z.string().min(1).optional(),
+    email: z.string().email().optional().nullable(),
+  })
+  .refine((v) => v.name !== undefined || v.email !== undefined, {
+    message: "provide at least one of name, email",
+  });
+
 const OrderInput = z.object({
   product: z.string().min(1, "product is required"),
   quantity: z.number().positive(),
@@ -54,6 +63,17 @@ api.get("/customers/:id", (req, res) => {
   const customer = customers.get(id);
   if (!customer) return res.status(404).json({ error: "customer_not_found" });
   res.json(customer);
+});
+
+// PATCH /api/customers/:id { name?, email? }  (email: null clears it)
+api.patch("/customers/:id", (req, res) => {
+  const id = parse(idParam, req.params.id, res);
+  if (id === undefined) return;
+  const body = parse(CustomerUpdate, req.body, res);
+  if (!body) return;
+  const updated = customers.update(id, body);
+  if (!updated) return res.status(404).json({ error: "customer_not_found" });
+  res.json(updated);
 });
 
 // DELETE /api/customers/:id  (cascades to that customer's orders)

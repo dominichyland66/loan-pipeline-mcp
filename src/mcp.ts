@@ -72,6 +72,29 @@ export function createMcpServer(apiBase: string): McpServer {
   );
 
   server.registerTool(
+    "update_customer",
+    {
+      title: "Update customer",
+      description:
+        "Change a customer's name and/or email. Only the fields you pass are changed. " +
+        "Pass email as an empty string to remove it. Returns the updated customer.",
+      inputSchema: {
+        customer_id: z.number().int().positive().describe("Customer id from find_customers"),
+        name: z.string().min(1).optional().describe("New full name"),
+        email: z.string().optional().describe("New email address, or '' to clear"),
+      },
+      annotations: { idempotentHint: true },
+    },
+    wrap(({ customer_id, name, email }) => {
+      if (name === undefined && email === undefined) throw new Error("Provide a new name and/or email.");
+      const body: Record<string, unknown> = {};
+      if (name !== undefined) body.name = name;
+      if (email !== undefined) body.email = email === "" ? null : email;
+      return call("PATCH", `/customers/${customer_id}`, body);
+    }),
+  );
+
+  server.registerTool(
     "delete_customer",
     {
       title: "Delete customer",
