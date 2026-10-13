@@ -34,7 +34,7 @@ const readJson = (file: string) => {
 };
 const pkg = readJson("package.json") ?? {};
 const railwayJson = readJson("railway.json");
-const REPO_URL = "https://github.com/dominichyland66/mcp";
+const REPO_URL = "https://github.com/dominichyland66/loan-pipeline-mcp";
 const startedAt = new Date();
 
 const esc = (v: unknown) => String(v ?? "").replace(/\|/g, "\\|");
