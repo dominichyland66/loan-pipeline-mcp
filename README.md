@@ -98,7 +98,7 @@ Then try:
 ## Layout
 
 ```
-src/db.ts       SQLite schema + queries (better-sqlite3)
+src/db.ts       SQLite schema + queries (built-in node:sqlite, no native build)
 src/api.ts      Express router for /api
 src/mcp.ts      MCP tools, each one an HTTP call to /api
 src/server.ts   Wires both into one Express app

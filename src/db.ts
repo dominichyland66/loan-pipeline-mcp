@@ -1,15 +1,19 @@
-import Database from "better-sqlite3";
+import { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import path from "node:path";
 
+// Uses Node's built-in SQLite (node:sqlite, Node 22.13+/24), so there is no
+// native addon to compile at install time. That matters on Railway, whose
+// build image has no Python or C toolchain.
+//
 // SQLite file location. On Railway, mount a volume and point DB_PATH at it,
 // e.g. DB_PATH=/data/app.db. Locally it defaults to ./data/app.db.
 const DB_PATH = process.env.DB_PATH ?? path.join(process.cwd(), "data", "app.db");
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 
-export const db = new Database(DB_PATH);
-db.pragma("journal_mode = WAL");
-db.pragma("foreign_keys = ON");
+export const db = new DatabaseSync(DB_PATH);
+db.exec("PRAGMA journal_mode = WAL");
+db.exec("PRAGMA foreign_keys = ON");
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS customers (
@@ -47,17 +51,30 @@ export interface Order {
   created_at: string;
 }
 
+/** Run `fn` inside a transaction, rolling back if it throws. */
+export function transaction<T>(fn: () => T): T {
+  db.exec("BEGIN");
+  try {
+    const result = fn();
+    db.exec("COMMIT");
+    return result;
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+}
+
 export const customers = {
   list(search?: string): Customer[] {
     if (search && search.trim()) {
       return db
         .prepare("SELECT * FROM customers WHERE name LIKE ? COLLATE NOCASE ORDER BY name")
-        .all(`%${search.trim()}%`) as Customer[];
+        .all(`%${search.trim()}%`) as unknown as Customer[];
     }
-    return db.prepare("SELECT * FROM customers ORDER BY name").all() as Customer[];
+    return db.prepare("SELECT * FROM customers ORDER BY name").all() as unknown as Customer[];
   },
   get(id: number): Customer | undefined {
-    return db.prepare("SELECT * FROM customers WHERE id = ?").get(id) as Customer | undefined;
+    return db.prepare("SELECT * FROM customers WHERE id = ?").get(id) as unknown as Customer | undefined;
   },
   create(name: string, email?: string | null): Customer {
     const info = db
@@ -73,16 +90,16 @@ export const customers = {
 export const orders = {
   listForCustomer(customerId: number, opts: { since?: string; until?: string; product?: string } = {}): Order[] {
     const where = ["customer_id = ?"];
-    const params: unknown[] = [customerId];
+    const params: (string | number)[] = [customerId];
     if (opts.since) { where.push("created_at >= ?"); params.push(opts.since); }
     if (opts.until) { where.push("created_at <= ?"); params.push(opts.until); }
     if (opts.product) { where.push("product LIKE ? COLLATE NOCASE"); params.push(`%${opts.product}%`); }
     return db
       .prepare(`SELECT * FROM orders WHERE ${where.join(" AND ")} ORDER BY created_at DESC`)
-      .all(...params) as Order[];
+      .all(...params) as unknown as Order[];
   },
   get(id: number): Order | undefined {
-    return db.prepare("SELECT * FROM orders WHERE id = ?").get(id) as Order | undefined;
+    return db.prepare("SELECT * FROM orders WHERE id = ?").get(id) as unknown as Order | undefined;
   },
   create(customerId: number, product: string, quantity: number, unit: string): Order {
     const info = db
