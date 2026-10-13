@@ -21,8 +21,15 @@ show("update_customer rename + email", await client.callTool({ name: "update_cus
 show("update_customer clear email", await client.callTool({ name: "update_customer", arguments: { customer_id: jones.id, email: "" } }));
 show("update_customer nothing (error)", await client.callTool({ name: "update_customer", arguments: { customer_id: jones.id } }));
 show("add_order 2kg apples", await client.callTool({ name: "add_order", arguments: { customer_id: jones.id, product: "apples", quantity: 2, unit: "kg" } }));
-const mary: any = await client.callTool({ name: "find_customers", arguments: { search: "mary brown" } });
-const maryId = JSON.parse(mary.content[0].text)[0].id;
+// Mary Brown may not exist on a fresh database; create her if needed.
+let mary: any = await client.callTool({ name: "find_customers", arguments: { search: "mary brown" } });
+let maryList = JSON.parse(mary.content[0].text);
+if (maryList.length === 0) {
+  show("add_customer Mary Brown (missing)", await client.callTool({ name: "add_customer", arguments: { name: "Mary Brown" } }));
+  mary = await client.callTool({ name: "find_customers", arguments: { search: "mary brown" } });
+  maryList = JSON.parse(mary.content[0].text);
+}
+const maryId = maryList[0].id;
 show("list_orders mary bananas last month", await client.callTool({ name: "list_orders", arguments: { customer_id: maryId, product: "banana", since: "2026-09-13" } }));
 show("delete_customer (missing)", await client.callTool({ name: "delete_customer", arguments: { customer_id: 999 } }));
 show("delete_customer jones", await client.callTool({ name: "delete_customer", arguments: { customer_id: jones.id } }));
