@@ -2,10 +2,18 @@ import express from "express";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { api } from "./api.js";
 import { createMcpServer } from "./mcp.js";
+import { seedIfEmpty } from "./seed.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
 // Where the MCP tools reach the REST API. Defaults to this same process.
 const API_BASE = process.env.API_BASE ?? `http://127.0.0.1:${PORT}/api`;
+
+// Demo convenience: a fresh (empty) database gets sample data on startup.
+// Railway's disk is ephemeral, so every deploy starts clean and reseeded.
+// Set SEED_DEMO_DATA=false to disable.
+if (process.env.SEED_DEMO_DATA !== "false" && seedIfEmpty()) {
+  console.log("Seeded demo data into empty database");
+}
 
 const app = express();
 app.use(express.json());

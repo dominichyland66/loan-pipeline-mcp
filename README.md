@@ -23,7 +23,8 @@ npm run seed         # optional demo data (Mary Brown, Peter Jones, Sam Patel)
 npm run smoke        # drives every MCP tool through a real MCP client
 ```
 
-Data lives in `./data/app.db` (override with `DB_PATH`).
+Data lives in `./data/app.db` (override with `DB_PATH`). On startup, an empty
+database is seeded with demo data (set `SEED_DEMO_DATA=false` to turn that off).
 
 ## REST API
 
@@ -63,14 +64,16 @@ Mary Brown bought in the last month" becomes `find_customers("Mary Brown")` then
 ## Deploy to Railway
 
 1. Push this repo to GitHub, then in Railway: **New Project → Deploy from GitHub repo**.
+   If the repo isn't listed, grant the Railway GitHub App access to it (GitHub →
+   Settings → Applications → Railway → Configure → Repository access).
    `railway.json` sets the build (`npm run build`; Nixpacks installs dependencies itself), start (`npm start`) and health check.
-2. Add a **Volume** to the service (service → Settings → Volumes) with mount path `/data`.
-3. Add a variable `DB_PATH=/data/app.db`. Railway sets `PORT` for you.
-4. Under **Settings → Networking → Generate Domain** to get a public URL.
-5. Check `https://<your-app>.up.railway.app/health` returns `{"ok":true}`.
+2. Under **Settings → Networking → Generate Domain** to get a public URL. Railway sets `PORT` for you.
+3. Check `https://<your-app>.up.railway.app/health` returns `{"ok":true}`.
 
-Optional: seed demo data on Railway with `railway run npm run seed` (Railway CLI),
-or just add customers through Claude.
+The database is on the container's ephemeral disk, so **every deploy starts
+fresh and is reseeded with demo data**. That's deliberate for a demo. If you
+ever want data to survive deploys, add a Volume mounted at `/data` and set
+`DB_PATH=/data/app.db`; seeding then only happens the first time.
 
 ## Connect Claude Desktop
 
@@ -105,5 +108,6 @@ src/db.ts       SQLite schema + queries (built-in node:sqlite, no native build)
 src/api.ts      Express router for /api
 src/mcp.ts      MCP tools, each one an HTTP call to /api
 src/server.ts   Wires both into one Express app
-scripts/        seed.ts (demo data), smoke-mcp.ts (MCP client test)
+src/seed.ts     demo data, applied automatically to an empty database
+scripts/        seed.ts (manual seed), smoke-mcp.ts (MCP client test)
 ```
